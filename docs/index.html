@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DUESLIN 1.0 — 简洁 · 快速 · 兼容旧设备</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='2' y='2' width='60' height='60' rx='15' fill='%232563eb'/%3E%3Cpath d='M18 18 H26 A16 16 0 1 1 26 46 H18 Z' fill='white'/%3E%3C/svg%3E">
+<style>
+  :root{
+    --brand:#2563eb; --brand-2:#06b6d4; --ink:#111827; --ink-2:#374151;
+    --mut:#6b7280; --line:#e5e7eb; --canvas:#f5f7fa; --card:#ffffff;
+    --ok:#16a34a; --warn:#d97706;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    font-family:"PingFang SC","Microsoft YaHei","Noto Sans SC",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+    background:var(--canvas); color:var(--ink); line-height:1.6;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1080px;margin:0 auto;padding:0 24px}
+
+  /* ---------- 顶部导航 ---------- */
+  header{
+    position:sticky;top:0;z-index:50;background:rgba(255,255,255,.86);
+    backdrop-filter:blur(10px);border-bottom:1px solid var(--line);
+  }
+  .nav{display:flex;align-items:center;justify-content:space-between;height:60px}
+  .brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:18px;text-decoration:none;color:var(--ink)}
+  .brand img{width:30px;height:30px;border-radius:8px}
+  .nav-links{display:flex;gap:26px;align-items:center}
+  .nav-links a{color:var(--ink-2);text-decoration:none;font-size:14px;transition:color .15s}
+  .nav-links a:hover{color:var(--brand)}
+  .btn{
+    display:inline-flex;align-items:center;gap:8px;background:var(--brand);color:#fff;
+    border:none;border-radius:10px;padding:12px 26px;font-size:15px;font-weight:600;
+    cursor:pointer;text-decoration:none;transition:background .15s,transform .1s;
+  }
+  .btn:hover{background:#1d4ed8}
+  .btn:active{transform:scale(.98)}
+  .btn.ghost{background:#eef2ff;color:var(--brand)}
+  .btn.ghost:hover{background:#e0e7ff}
+  .btn-sm{padding:8px 18px;font-size:13px;border-radius:8px}
+
+  /* ---------- Hero ---------- */
+  .hero{padding:84px 0 64px;text-align:center;position:relative;overflow:hidden}
+  .hero::before{
+    content:"";position:absolute;inset:0;pointer-events:none;
+    background:radial-gradient(600px 300px at 20% 10%,rgba(37,99,235,.08),transparent 60%),
+               radial-gradient(500px 260px at 85% 30%,rgba(6,182,212,.08),transparent 60%);
+  }
+  .hero .logo{width:96px;height:96px;border-radius:24px;box-shadow:0 12px 32px rgba(37,99,235,.25);margin-bottom:24px}
+  .hero h1{font-size:44px;font-weight:800;letter-spacing:-.5px;line-height:1.2}
+  .hero h1 span{background:linear-gradient(90deg,var(--brand),var(--brand-2));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .hero p.sub{font-size:17px;color:var(--mut);max-width:620px;margin:18px auto 32px}
+  .hero .ctas{display:flex;gap:14px;justify-content:center;flex-wrap:wrap}
+  .stats{display:flex;justify-content:center;gap:0;margin-top:56px;flex-wrap:wrap}
+  .stat{padding:0 34px;border-left:1px solid var(--line)}
+  .stat:first-child{border-left:none}
+  .stat b{font-size:30px;font-weight:800;background:linear-gradient(90deg,var(--brand),var(--brand-2));-webkit-background-clip:text;background-clip:text;color:transparent;display:block}
+  .stat span{font-size:13px;color:var(--mut)}
+
+  /* ---------- 通用区块 ---------- */
+  section{padding:72px 0}
+  .sec-head{text-align:center;max-width:640px;margin:0 auto 48px}
+  .sec-head .k{display:inline-block;font-size:13px;font-weight:600;color:var(--brand);margin-bottom:10px}
+  .sec-head h2{font-size:30px;font-weight:800;letter-spacing:-.3px}
+  .sec-head p{color:var(--mut);margin-top:10px;font-size:15px}
+
+  /* ---------- 安装时间轴 ---------- */
+  .steps{display:grid;grid-template-columns:repeat(4,1fr);gap:18px;counter-reset:st}
+  .step{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px;position:relative;box-shadow:0 1px 4px rgba(0,0,0,.04)}
+  .step::before{
+    counter-increment:st;content:counter(st);
+    position:absolute;top:-14px;left:22px;width:28px;height:28px;border-radius:50%;
+    background:linear-gradient(135deg,var(--brand),var(--brand-2));color:#fff;
+    display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;
+  }
+  .step h3{font-size:16px;font-weight:700;margin:12px 0 6px}
+  .step p{font-size:13.5px;color:var(--mut)}
+
+  /* ---------- 特性 ---------- */
+  .feat-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
+  .feat{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:24px;transition:transform .15s,box-shadow .15s}
+  .feat:hover{transform:translateY(-3px);box-shadow:0 10px 24px rgba(0,0,0,.07)}
+  .feat .ic{width:42px;height:42px;border-radius:11px;background:#eef2ff;display:flex;align-items:center;justify-content:center;margin-bottom:14px}
+  .feat h3{font-size:16px;font-weight:700;margin-bottom:6px}
+  .feat p{font-size:13.5px;color:var(--mut)}
+
+  /* ---------- 命令演示 ---------- */
+  .cmd-wrap{display:grid;grid-template-columns:1.05fr .95fr;gap:24px;align-items:center}
+  .cmd-card{background:#0f172a;border-radius:16px;overflow:hidden;box-shadow:0 18px 40px rgba(15,23,42,.28)}
+  .cmd-bar{display:flex;align-items:center;gap:6px;padding:12px 16px;background:#1e293b}
+  .cmd-bar i{width:11px;height:11px;border-radius:50%;display:block}
+  .cmd-bar i:nth-child(1){background:#f87171}.cmd-bar i:nth-child(2){background:#fbbf24}.cmd-bar i:nth-child(3){background:#34d399}
+  .cmd-body{padding:18px 20px;font-family:"JetBrains Mono","DejaVu Sans Mono",ui-monospace,monospace;font-size:13px;line-height:2}
+  .cmd-body .p{color:#64748b}.cmd-body .in{color:#e2e8f0}
+  .cmd-body .ok{color:#34d399}.cmd-body .dim{color:#94a3b8}
+  .cmd-body .copy{cursor:pointer;color:#38bdf8;text-decoration:none;border-bottom:1px dotted #38bdf8}
+  .cmd-note h3{font-size:22px;font-weight:800;margin-bottom:12px}
+  .cmd-note p{color:var(--ink-2);font-size:15px;margin-bottom:10px}
+  .cmd-note .tag{display:inline-block;background:#eef2ff;color:var(--brand);font-size:12.5px;font-weight:600;padding:4px 12px;border-radius:20px;margin:14px 6px 0 0}
+
+  /* ---------- 规格表 ---------- */
+  table.spec{width:100%;border-collapse:collapse;background:var(--card);border-radius:14px;overflow:hidden;border:1px solid var(--line);table-layout:fixed}
+  table.spec col:first-child{width:22%}
+  table.spec col:nth-child(2){width:78%}
+  table.spec th,table.spec td{padding:14px 18px;text-align:left;font-size:14px}
+  table.spec thead th{background:#f9fafb;font-weight:700;border-bottom:1px solid var(--line)}
+  table.spec tbody tr:nth-child(odd){background:#fcfcfd}
+  table.spec tbody tr:not(:last-child) td{border-bottom:1px solid #f3f4f6}
+  table.spec td b{color:var(--brand)}
+
+  /* ---------- 视频 ---------- */
+  .video-box{max-width:880px;margin:0 auto;background:#0f172a;border-radius:18px;overflow:hidden;box-shadow:0 20px 44px rgba(15,23,42,.25)}
+  .video-box video{width:100%;display:block;aspect-ratio:16/9;object-fit:cover;background:#0f172a}
+  .video-cap{color:#94a3b8;font-size:13px;padding:12px 18px}
+
+  /* ---------- 页脚 ---------- */
+  footer{border-top:1px solid var(--line);padding:36px 0;color:var(--mut);font-size:13.5px;background:#fff}
+  .foot{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:14px}
+
+  /* ---------- 桌面窗口概念图 ---------- */
+  .desk{margin-top:56px;border-radius:18px;overflow:hidden;border:1px solid var(--line);box-shadow:0 24px 60px rgba(0,0,0,.12);background:var(--card)}
+  .desk-top{display:flex;gap:8px;padding:12px 16px;background:#f9fafb;border-bottom:1px solid var(--line);align-items:center}
+  .desk-top i{width:12px;height:12px;border-radius:50%}
+  .desk-top i:nth-child(1){background:#f87171}.desk-top i:nth-child(2){background:#fbbf24}.desk-top i:nth-child(3){background:#34d399}
+  .desk-top .dtitle{font-size:12.5px;color:var(--mut);margin-left:10px}
+  .desk-body{position:relative;min-height:300px;background:url('assets/wallpaper.jpg') center/cover}
+  .desk-win{position:absolute;left:9%;top:14%;width:62%;background:#fff;border-radius:10px;box-shadow:0 16px 40px rgba(0,0,0,.22);overflow:hidden}
+  .desk-win .wbar{display:flex;align-items:center;gap:8px;padding:9px 12px;background:#f1f5f9;border-bottom:1px solid var(--line);font-size:12.5px;color:var(--ink-2)}
+  .desk-win .wbar i{width:11px;height:11px;border-radius:50%;background:#e5e7eb}
+  .desk-win .wbody{padding:16px 18px;font-size:13px;color:var(--ink-2)}
+  .desk-win .wbody .row{display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px dashed #f1f5f9}
+  .desk-win .wbody .row:last-child{border-bottom:none}
+  .desk-bar{display:flex;align-items:center;gap:14px;background:rgba(255,255,255,.94);backdrop-filter:blur(8px);padding:8px 14px;position:absolute;left:0;right:0;bottom:0;border-top:1px solid rgba(0,0,0,.06)}
+  .desk-bar .start{display:flex;align-items:center;gap:7px;background:#fff;border:1px solid var(--line);border-radius:8px;padding:5px 12px;font-size:13px;font-weight:600}
+  .desk-bar .start img{width:18px;height:18px;border-radius:5px}
+  .desk-bar .task{display:flex;gap:6px}
+  .desk-bar .task span{background:#eef2ff;color:var(--brand);font-size:12px;padding:4px 12px;border-radius:6px}
+  .desk-bar .tray{margin-left:auto;font-size:12px;color:var(--mut)}
+
+  /* ---------- 响应式 ---------- */
+  @media (max-width:860px){
+    .hero h1{font-size:32px}
+    .steps{grid-template-columns:repeat(2,1fr)}
+    .feat-grid{grid-template-columns:repeat(2,1fr)}
+    .cmd-wrap{grid-template-columns:1fr}
+    .stat{padding:0 18px}
+    .nav-links a:not(.btn){display:none}
+  }
+  @media (max-width:520px){
+    .steps,.feat-grid{grid-template-columns:1fr}
+    .stat{width:50%;padding:14px 0;border-left:none}
+    .desk-win{left:5%;width:90%}
+  }
+  @media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap nav">
+    <a class="brand" href="#top"><img src="assets/logo.png" alt="DUESLIN">DUESLIN</a>
+    <div class="nav-links">
+      <a href="#install">安装</a>
+      <a href="#features">特性</a>
+      <a href="#commands">命令</a>
+      <a href="#specs">规格</a>
+      <a href="#video">演示</a>
+      <a class="btn btn-sm" href="#download" id="navDownload">下载 ISO</a>
+    </div>
+  </div>
+</header>
+
+<!-- ===== Hero ===== -->
+<section class="hero" id="top">
+  <div class="wrap">
+    <img class="logo" src="assets/logo.png" alt="DUESLIN Logo">
+    <h1>把旧电脑变成<br><span>秒级启动</span>的全新系统</h1>
+    <p class="sub">DUESLIN 1.0 —— 仅需 400MB+ 磁盘与 1GB 内存，Windows 式安装体验，内置浏览器、WiFi / 蓝牙 / 音频驱动，兼容大多数旧机器。</p>
+    <div class="ctas">
+      <a class="btn" href="#download" id="heroDownload">下载 DUESLIN 1.0</a>
+      <a class="btn ghost" href="#video">观看演示视频</a>
+    </div>
+    <div class="stats">
+      <div class="stat"><b>400MB+</b><span>安装占用</span></div>
+      <div class="stat"><b>1GB</b><span>最低内存</span></div>
+      <div class="stat"><b>&lt;1GB</b><span>ISO 镜像体积</span></div>
+      <div class="stat"><b>秒级</b><span>启动速度</span></div>
+    </div>
+
+    <!-- 桌面概念图 -->
+    <div class="desk" aria-hidden="true">
+      <div class="desk-top">
+        <i></i><i></i><i></i><span class="dtitle">DUESLIN 桌面预览</span>
+      </div>
+      <div class="desk-body">
+        <div class="desk-win">
+          <div class="wbar"><i></i><i></i><i></i><span>DUESLIN 终端</span></div>
+          <div class="wbody">
+            <div class="row"><span>dueslin@DUESLIN:~$</span><span>install python</span></div>
+            <div class="row"><span>[DUESLIN] 正在安装: python3 ...</span><b style="color:var(--ok)">✓ 完成</b></div>
+            <div class="row"><span>dueslin@DUESLIN:~$</span><span>wifi connect Home</span></div>
+            <div class="row"><span>dueslin@DUESLIN:~$</span><span>su retc</span></div>
+          </div>
+        </div>
+        <div class="desk-bar">
+          <span class="start"><img src="assets/logo.png" alt="">开始</span>
+          <div class="task"><span>终端</span><span>Firefox</span><span>任务管理器</span></div>
+          <span class="tray">WiFi 100% · 09:41</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== 安装流程 ===== -->
+<section id="install">
+  <div class="wrap">
+    <div class="sec-head">
+      <span class="k">安装方式与 Windows 一致</span>
+      <h2>四步完成安装</h2>
+      <p>图形化安装界面（类苹果风格 UI），自动分区、自动解压 .wim 镜像、自动安装引导，完成后自动重启。</p>
+    </div>
+    <div class="steps">
+      <div class="step"><h3>下载镜像</h3><p>获取 DUESLIN ISO（小于 1GB），校验无误。</p></div>
+      <div class="step"><h3>写入 U 盘</h3><p>用 Rufus / Ventoy / dd 制作启动盘，BIOS 与 UEFI 均支持。</p></div>
+      <div class="step"><h3>启动安装</h3><p>从 U 盘启动，选择磁盘，系统自动完成分区与解压。</p></div>
+      <div class="step"><h3>重启进入桌面</h3><p>安装完成自动重启，配置用户与 WiFi 后即进入桌面。</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== 特性 ===== -->
+<section id="features" style="background:#fff;border-top:1px solid var(--line);border-bottom:1px solid var(--line)">
+  <div class="wrap">
+    <div class="sec-head">
+      <span class="k">开箱即用</span>
+      <h2>面向旧设备，该有的都有</h2>
+    </div>
+    <div class="feat-grid">
+      <div class="feat">
+        <div class="ic"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="2" stroke-linecap="round"><path d="M13 2 4 14h6l-1 8 9-12h-6l1-8z"/></svg></div>
+        <h3>秒级启动</h3><p>精简系统与轻量桌面，开机数秒即达桌面，老机械硬盘也能流畅运行。</p>
+      </div>
+      <div class="feat">
+        <div class="ic"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="2" stroke-linecap="round"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/></svg></div>
+        <h3>极致轻量</h3><p>安装仅需 400MB+ 磁盘，1GB 内存流畅运行，释放旧电脑的全部性能。</p>
+      </div>
+      <div class="feat">
+        <div class="ic"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="2" stroke-linecap="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M2 9h20M6 14h4"/></svg></div>
+        <h3>Windows 式桌面</h3><p>底部任务栏、开始菜单、托盘、右键菜单，上手零成本。</p>
+      </div>
+      <div class="feat">
+        <div class="ic"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="2" stroke-linecap="round"><path d="M4 17l6-6-6-6M12 19h8"/></svg></div>
+        <h3>全新命令系统</h3><p>简化命令（install / files / wifi…），Linux 与 cmd 命令同样可直接使用。</p>
+      </div>
+      <div class="feat">
+        <div class="ic"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r=".5" fill="#2563eb"/></svg></div>
+        <h3>PE 修复模式</h3><p>输入 <code>pe te=1</code> 即可启用修复环境：修引导、查磁盘、重装系统。</p>
+      </div>
+      <div class="feat">
+        <div class="ic"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="2" stroke-linecap="round"><path d="M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2zM9 21h6"/></svg></div>
+        <h3>驱动齐全</h3><p>WiFi、蓝牙、音频、Intel / AMD 显卡驱动开箱即用，无需手动安装。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== 命令 ===== -->
+<section id="commands">
+  <div class="wrap cmd-wrap">
+    <div class="cmd-card">
+      <div class="cmd-bar"><i></i><i></i><i></i></div>
+      <div class="cmd-body">
+        <div><span class="p">dueslin@DUESLIN:~$</span> <span class="in">install python</span></div>
+        <div><span class="ok">[DUESLIN]</span> <span class="dim">正在安装: python3 ...</span></div>
+        <div><span class="ok">[DUESLIN]</span> <span class="dim">安装完成 ✓</span></div>
+        <div><span class="p">dueslin@DUESLIN:~$</span> <span class="in">wifi</span></div>
+        <div><span class="dim">HomeWiFi&nbsp;&nbsp;&nbsp;&nbsp;100%&nbsp;&nbsp;WPA2</span></div>
+        <div><span class="p">dueslin@DUESLIN:~$</span> <span class="in">wifi connect HomeWiFi</span></div>
+        <div><span class="ok">[DUESLIN]</span> <span class="dim">已连接 ✓</span></div>
+        <div><span class="p">dueslin@DUESLIN:~$</span> <span class="in">su retc</span></div>
+        <div><span class="ok">[DUESLIN]</span> <span class="dim">已提升到最高权限（retc）</span></div>
+        <div><span class="p">root@DUESLIN:~#</span> <span class="in">pe te=1</span></div>
+        <div><span class="ok">[DUESLIN]</span> <span class="dim">PE 修复模式已启用 ✓</span></div>
+      </div>
+    </div>
+    <div class="cmd-note">
+      <h3>全新的简化命令</h3>
+      <p>DUESLIN 内置全新的命令解释器：命令更短、更好记，但用法与 cmd / Linux 终端一致，运行逻辑完全真实可用。</p>
+      <p>安装软件只需 <code>install python</code>，连接 WiFi 只需 <code>wifi connect 名称 密码</code>，提权只需 <code>su retc</code>——就是这么简单。</p>
+      <div>
+        <span class="tag">install</span><span class="tag">remove</span><span class="tag">files</span><span class="tag">goto</span><span class="tag">wifi</span><span class="tag">lock</span><span class="tag">task</span><span class="tag">shutdown</span><span class="tag">su retc</span><span class="tag">pe te=1/2</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== 规格 ===== -->
+<section id="specs" style="background:#fff;border-top:1px solid var(--line)">
+  <div class="wrap">
+    <div class="sec-head">
+      <span class="k">硬件要求</span>
+      <h2>旧机器也能跑</h2>
+    </div>
+    <div style="max-width:760px;margin:0 auto">
+      <table class="spec">
+        <colgroup><col><col></colgroup>
+        <thead><tr><th>项目</th><th>要求</th></tr></thead>
+        <tbody>
+          <tr><td>CPU</td><td>x86_64 架构（支持 Intel / AMD）</td></tr>
+          <tr><td>内存</td><td><b>1GB</b> 最低，2GB 推荐</td></tr>
+          <tr><td>磁盘</td><td><b>400MB+</b> 最低，8GB 推荐</td></tr>
+          <tr><td>引导</td><td>UEFI 与 传统 BIOS 双支持</td></tr>
+          <tr><td>ISO 体积</td><td><b>&lt;1GB</b>，使用 .wim 压缩系统镜像</td></tr>
+          <tr><td>内置</td><td>Firefox 浏览器 · WiFi / 蓝牙 / 音频驱动 · 任务管理器 · PE 修复模式</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ===== 视频 ===== -->
+<section id="video">
+  <div class="wrap">
+    <div class="sec-head">
+      <span class="k">演示视频</span>
+      <h2>一分钟了解 DUESLIN</h2>
+    </div>
+    <div class="video-box">
+      <video controls preload="metadata" poster="assets/wallpaper.jpg">
+        <source src="assets/promo.mp4" type="video/mp4">
+        您的浏览器不支持视频播放，请下载镜像体验。
+      </video>
+      <div class="video-cap">DUESLIN 1.0 官方宣传片</div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== 下载 ===== -->
+<section id="download" style="background:#0f172a;text-align:center">
+  <div class="wrap">
+    <h2 style="color:#fff;font-size:30px;font-weight:800;letter-spacing:-.3px">现在就开始，让旧电脑焕然一新</h2>
+    <p style="color:#94a3b8;margin:14px auto 30px;max-width:520px">DUESLIN 1.0 已开放下载。镜像小于 1GB，支持 U 盘启动安装，安装后即可正常使用。</p>
+    <div class="ctas">
+      <a class="btn" id="dlGithub" href="#" target="_blank" rel="noopener">前往 GitHub 下载</a>
+      <a class="btn ghost" href="#install">查看安装教程</a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap foot">
+    <span>DUESLIN 1.0 · 基于 Linux 内核构建 · 遵循开源协议</span>
+    <span><a href="#" id="footGithub" style="color:var(--mut);text-decoration:none">GitHub 仓库</a> · <span id="year"></span></span>
+  </div>
+</footer>
+
+<script>
+  var YEAR_EL = document.getElementById('year');
+  if (YEAR_EL) YEAR_EL.textContent = new Date().getFullYear() + ' DUESLIN';
+
+  // 下载按钮统一跳转 GitHub Release（发布后填充链接）
+  var REL = 'https://github.com/ETQWFD/dueslin/releases/download/v1.0.0/DUESLIN-1.0.iso';
+  var DLS = ['navDownload','heroDownload','dlGithub','footGithub'];
+  DLS.forEach(function(id){
+    var el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener('click', function(e){
+      if (REL) { el.href = REL; return; }
+      e.preventDefault();
+      var t = document.createElement('div');
+      t.style.cssText = 'position:fixed;left:50%;bottom:32px;transform:translateX(-50%);background:#111827;color:#fff;padding:12px 22px;border-radius:10px;font-size:14px;z-index:99;box-shadow:0 8px 24px rgba(0,0,0,.25)';
+      t.textContent = '下载链接即将就绪，请稍后访问本页刷新。';
+      document.body.appendChild(t);
+      setTimeout(function(){ t.remove(); }, 3200);
+    });
+  });
+</script>
+</body>
+</html>

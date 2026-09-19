@@ -1,0 +1,236 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+DUESLIN 任务管理器
+分类显示: 终端 / 应用程序 / 核心进程
+结束进程: 普通进程可直接结束；系统核心进程需要 su retc 提权
+"""
+import os
+import re
+import time
+import subprocess
+import threading
+
+import gi
+gi.require_version("Gtk", "3.0")
+from gi.repository import Gtk, GLib, Gdk, Pango
+
+BRAND = "#2563eb"
+BG = "#f5f7fa"
+
+CSS = f"""
+window {{ background: {BG}; }}
+.title {{ font-size: 17px; font-weight: 700; color: #111827; }}
+.subtitle {{ font-size: 12px; color: #6b7280; }}
+list {{ background: #ffffff; border-radius: 10px; }}
+.primary {{ background: {BRAND}; color: white; border-radius: 7px; padding: 7px 16px; }}
+.danger {{ background: #dc2626; color: white; border-radius: 7px; padding: 7px 16px; }}
+.secondary {{ background: #e5e7eb; color: #374151; border-radius: 7px; padding: 7px 16px; }}
+"""
+
+CORE_KEYWORDS = ("systemd", "openrc", "udev", "dbus", "lightdm", "kthreadd", "ksoftirqd",
+                 "kworker", "kthread", "xorg", "init", "agetty", "login", "pipewire",
+                 "wireplumber", "elogind", "networkmanager", "wpa_supplicant", "bluetoothd",
+                 "alsactl", "mount", "upowerd", "rtkit", "gvfsd")
+
+def read_proc():
+    procs = []
+    try:
+        for pid in os.listdir("/proc"):
+            if not pid.isdigit():
+                continue
+            p = int(pid)
+            try:
+                with open(f"/proc/{pid}/stat") as f:
+                    s = f.read()
+                m = re.match(r"(\d+) \(([^)]*)\) (\w)", s)
+                if not m:
+                    continue
+                name, state = m.group(2), m.group(3)
+                parts = s[m.end():].split()
+                # utime=14 stime=15 (offset from parts after ")"); easier: parse fields
+                with open(f"/proc/{pid}/status") as f:
+                    status = f.read()
+                vm = 0
+                for line in status.splitlines():
+                    if line.startswith("VmRSS:"):
+                        vm = int(line.split()[1])  # kB
+                    elif line.startswith("Uid:"):
+                        uid = line.split()[1]
+                cmdline = ""
+                try:
+                    with open(f"/proc/{pid}/cmdline", "rb") as f:
+                        cmdline = f.read().replace(b"\x00", b" ").decode("utf-8", "replace").strip()
+                except Exception:
+                    pass
+                procs.append({"pid": p, "name": name, "state": state, "mem": vm,
+                              "uid": int(uid), "cmd": cmdline})
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return procs
+
+def is_core(p):
+    n = p["name"].lower()
+    if p["pid"] <= 2:
+        return True
+    if n.startswith("k") and n in ("kthreadd", "ksoftirqd", "kworker", "kthread"):
+        return True
+    c = (p["cmd"] + " " + n).lower()
+    return any(k in c for k in CORE_KEYWORDS)
+
+class TaskWindow(Gtk.Window):
+    def __init__(self):
+        super().__init__(title="DUESLIN 任务管理器")
+        self.set_default_size(780, 520)
+        self.set_position(Gtk.WindowPosition.CENTER)
+        self.am_root = os.geteuid() == 0
+
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        outer.set_margin_top(12); outer.set_margin_start(14)
+        outer.set_margin_end(14); outer.set_margin_bottom(12)
+        self.add(outer)
+
+        # 顶栏
+        top = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        t = Gtk.Label()
+        t.set_markup('<span class="title">DUESLIN 任务管理器</span>')
+        top.pack_start(t, False, False, 0)
+        self.perm_lb = Gtk.Label()
+        self.perm_lb.set_markup(
+            f'<span color="{"#16a34a" if self.am_root else "#9ca3af"}">'
+            f'{"最高权限 (retc)" if self.am_root else "普通权限 · 核心进程需 su retc 提权"}</span>')
+        top.pack_end(self.perm_lb, False, False, 0)
+        outer.pack_start(top, False, False, 0)
+
+        # 选项卡
+        nb = Gtk.Notebook()
+        nb.set_margin_top(4)
+        self.pages = {}
+        for key, title in (("terminal", "终端"), ("apps", "应用程序"), ("core", "核心进程")):
+            sw = Gtk.ScrolledWindow()
+            ls = Gtk.ListBox()
+            ls.set_selection_mode(Gtk.SelectionMode.SINGLE)
+            sw.add(ls)
+            nb.append_page(sw, Gtk.Label(label=title))
+            self.pages[key] = ls
+        outer.pack_start(nb, True, True, 0)
+
+        # 底栏按钮
+        bottom = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        kill = Gtk.Button(label="结束所选进程")
+        kill.get_style_context().add_class("danger")
+        kill.connect("clicked", self.on_kill)
+        su = Gtk.Button(label="su retc 提权")
+        su.get_style_context().add_class("secondary")
+        su.connect("clicked", self.on_su)
+        ref = Gtk.Button(label="刷新")
+        ref.get_style_context().add_class("secondary")
+        ref.connect("clicked", lambda w: self.refresh())
+        close = Gtk.Button(label="关闭")
+        close.get_style_context().add_class("secondary")
+        close.connect("clicked", lambda w: self.destroy())
+        bottom.pack_start(kill, False, False, 0)
+        bottom.pack_start(su, False, False, 0)
+        bottom.pack_start(ref, False, False, 0)
+        bottom.pack_end(close, False, False, 0)
+        outer.pack_start(bottom, False, False, 0)
+
+        self.current_tab = nb
+        nb.connect("switch-page", self.on_tab_switch)
+        self.refresh()
+        GLib.timeout_add(2500, self.refresh)
+
+    def on_tab_switch(self, nb, page, idx):
+        self.refresh()
+
+    def active_key(self):
+        return ["terminal", "apps", "core"][self.current_tab.get_current_page()]
+
+    def refresh(self):
+        procs = read_proc()
+        groups = {"terminal": [], "apps": [], "core": []}
+        for p in procs:
+            c = p["cmd"].lower()
+            if is_core(p):
+                groups["core"].append(p)
+            elif any(k in c for k in ("terminal", "xfce4-terminal", "dueslin", "bash", "sh ", "konsole", "gnome-terminal")):
+                groups["terminal"].append(p)
+            else:
+                groups["apps"].append(p)
+        for key in ("terminal", "apps", "core"):
+            ls = self.pages[key]
+            for ch in ls.get_children():
+                ls.remove(ch)
+            for p in groups[key]:
+                row = Gtk.ListBoxRow()
+                b = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+                b.set_margin_start(8); b.set_margin_end(8)
+                b.set_margin_top(6); b.set_margin_bottom(6)
+                name = Gtk.Label(label=p["name"], xalign=0)
+                name.set_hexpand(True)
+                name.set_ellipsize(Pango.EllipsizeMode.MIDDLE)
+                cmd = p["cmd"][:60] or p["name"]
+                sub = Gtk.Label(label=cmd, xalign=0)
+                sub.get_style_context().add_class("subtitle")
+                pid = Gtk.Label(label=f'PID {p["pid"]}', xalign=0)
+                mem = Gtk.Label(label=f'{p["mem"]/1024:.0f}MB', xalign=0)
+                b.pack_start(name, True, True, 0)
+                b.pack_start(sub, True, True, 0)
+                b.pack_start(pid, False, False, 8)
+                b.pack_start(mem, False, False, 0)
+                row.add(b)
+                row.set_data("proc", p)
+                ls.add(row)
+            ls.show_all()
+        self.last_procs = procs
+        return True
+
+    def on_kill(self, w):
+        key = self.active_key()
+        ls = self.pages[key]
+        row = ls.get_selected_row()
+        if row is None:
+            self.bubble("请先选择一个进程")
+            return
+        p = row.get_data("proc")
+        if is_core(p) and not self.am_root:
+            dlg = Gtk.MessageDialog(transient_for=self, modal=True,
+                                    buttons=Gtk.ButtonsType.OK,
+                                    message_format="权限不足，无法结束核心进程")
+            dlg.format_secondary_text(f"「{p['name']}」是系统核心进程。\n"
+                                      "请点击「su retc 提权」后再试。")
+            dlg.run(); dlg.destroy()
+            return
+        r = subprocess.run(f"kill -9 {p['pid']}", shell=True, capture_output=True, text=True)
+        if r.returncode == 0:
+            self.bubble(f"已结束进程 {p['name']} (PID {p['pid']})")
+        else:
+            self.bubble(f"无法结束 {p['name']}: {r.stderr.strip()[:80]}")
+        self.refresh()
+
+    def on_su(self, w):
+        subprocess.Popen("x-terminal-emulator -e bash -c 'sudo -i || su retc'",
+                         shell=True)
+        self.bubble("已打开提权终端，输入 retc 密码（若已配置）即可获得最高权限")
+
+    def bubble(self, msg):
+        dlg = Gtk.MessageDialog(transient_for=self, modal=False,
+                                buttons=Gtk.ButtonsType.OK, message_format=msg)
+        dlg.run(); dlg.destroy()
+
+    def apply_css(self):
+        sc = Gtk.CssProvider()
+        sc.load_from_data(CSS.encode())
+        Gtk.StyleContext.add_provider_for_screen(
+            Gdk.Screen.get_default(), sc, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+
+def main():
+    w = TaskWindow()
+    w.apply_css()
+    w.show_all()
+    Gtk.main()
+
+if __name__ == "__main__":
+    main()

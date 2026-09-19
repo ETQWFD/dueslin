@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=任务管理器
+Name[zh_CN]=任务管理器
+GenericName=DUESLIN Task Manager
+Comment=查看和结束运行中的程序
+Exec=dueslin-taskmgr
+Icon=/usr/share/dueslin/logo-48.png
+Terminal=false
+Categories=System;Monitor;Utility;
+Keywords=task;manager;process;

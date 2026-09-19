@@ -1,0 +1,20 @@
+#!/bin/sh
+# DUESLIN live/PE 环境 — X 启动入口
+# 根据内核启动模式决定运行安装器或 PE 修复菜单
+MODE="install"
+if [ -f /run/dueslin_mode ]; then
+    MODE="$(cat /run/dueslin_mode)"
+fi
+export DUESLIN_MODE="$MODE"
+echo "[DUESLIN] X 会话模式: $MODE"
+
+# 以 root 运行 X
+exec dbus-run-session -- bash -c '
+    openbox >/dev/null 2>&1 &
+    sleep 1
+    if [ "$DUESLIN_MODE" = "pe" ]; then
+        exec dueslin-pe-menu
+    else
+        exec dueslin-installer
+    fi
+'

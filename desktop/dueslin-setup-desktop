@@ -1,0 +1,36 @@
+#!/bin/sh
+# ============================================================
+# DUESLIN 桌面初始化（登录后自动运行）
+# 设置壁纸、主题、字体与快捷键（幂等）
+# ============================================================
+[ -n "$DISPLAY" ] || exit 0
+sleep 2
+
+Q="xfconf-query -c"
+
+# 壁纸（所有显示器/工作区）
+for key in $($Q xfce4-desktop -l 2>/dev/null | grep -E "last-image$"); do
+    $Q xfce4-desktop -p "$key" -s /usr/share/dueslin/wallpaper.png 2>/dev/null || true
+done
+
+# GTK 主题 / 图标 / 字体
+$Q xsettings -p /Gtk/ThemeName -s Paper 2>/dev/null || true
+$Q xsettings -p /Gtk/IconThemeName -s Adwaita 2>/dev/null || true
+$Q xsettings -p /Gtk/FontName -s "Noto Sans CJK SC 10" 2>/dev/null || true
+$Q xsettings -p /Gtk/MonospaceFontName -s "DejaVu Sans Mono 10" 2>/dev/null || true
+
+# 窗口管理器主题
+$Q xfwm4 -p /general/theme -s Default 2>/dev/null || true
+$Q xfwm4 -p /general/button_layout -s "|HMC" 2>/dev/null || true
+
+# 快捷键
+$Q xfce4-keyboard-shortcuts -n -p /commands/custom/"<Primary><Shift>Escape" -t string -s "dueslin-taskmgr" 2>/dev/null || true
+$Q xfce4-keyboard-shortcuts -n -p /commands/custom/"<Primary><Alt>t" -t string -s "xfce4-terminal" 2>/dev/null || true
+$Q xfce4-keyboard-shortcuts -n -p /commands/custom/"<Primary><Alt>Delete" -t string -s "dueslin-taskmgr" 2>/dev/null || true
+$Q xfce4-keyboard-shortcuts -n -p /commands/custom/"<Super>L" -t string -s "xflock4" 2>/dev/null || true
+$Q xfce4-keyboard-shortcuts -n -p /commands/custom/"<Alt>F1" -t string -s "xfce4-popup-whiskermenu" 2>/dev/null || true
+
+# 窗口管理器：Super 键弹出开始菜单（通过 xfwm4 的窗口键模拟）
+$Q xfwm4 -n -p /general/WorkspaceCount -t int -s 1 2>/dev/null || true
+
+exit 0

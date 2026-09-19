@@ -1,0 +1,11 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=DUESLIN 首次设置
+GenericName=First Boot Setup
+Comment=DUESLIN 首次启动配置向导
+Exec=/usr/bin/dueslin-firstboot
+Icon=/usr/share/dueslin/logo.png
+Terminal=false
+NoDisplay=false
+X-LightDM-Session-Type=user

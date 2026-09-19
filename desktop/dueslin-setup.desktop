@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=DUESLIN 桌面设置
+Comment=Apply DUESLIN desktop appearance
+Exec=/usr/bin/dueslin-setup-desktop
+Icon=/usr/share/dueslin/logo-48.png
+Terminal=false
+Hidden=false
+X-GNOME-Autostart-enabled=true

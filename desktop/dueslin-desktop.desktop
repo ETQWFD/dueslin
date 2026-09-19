@@ -1,0 +1,9 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=DUESLIN 终端
+Comment=打开 DUESLIN 终端
+Exec=xfce4-terminal --title="DUESLIN" -e dueslin
+Icon=/usr/share/dueslin/logo-48.png
+Terminal=false
+Categories=System;Utility;

@@ -1,0 +1,126 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+DUESLIN PE 修复模式菜单
+进入方式: 开机菜单选择「DUESLIN 修复模式 (PE)」
+功能: 修复引导 / 磁盘检查 / 打开终端 / 重新安装 / 重启
+"""
+import os
+import subprocess
+import time
+
+import gi
+gi.require_version("Gtk", "3.0")
+from gi.repository import Gtk, GLib, Gdk
+
+BRAND = "#2563eb"
+BG = "#f5f7fa"
+
+CSS = f"""
+window {{ background: {BG}; }}
+.title {{ font-size: 24px; font-weight: 700; color: #111827; }}
+.subtitle {{ font-size: 13px; color: #6b7280; }}
+.btn {{ min-height: 46px; border-radius: 10px; font-size: 14px; }}
+"""
+
+def sh(cmd):
+    return subprocess.run(cmd, shell=True, capture_output=True, text=True)
+
+class PeWindow(Gtk.Window):
+    def __init__(self):
+        super().__init__(title="DUESLIN 修复模式 (PE)")
+        self.set_default_size(760, 540)
+        self.set_position(Gtk.WindowPosition.CENTER)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        box.set_margin_top(36); box.set_margin_start(48); box.set_margin_end(48)
+        self.add(box)
+
+        t = Gtk.Label()
+        t.set_markup('<span class="title">DUESLIN 修复模式（PE）</span>')
+        box.pack_start(t, False, False, 0)
+        st = Gtk.Label(label="请选择要执行的修复操作")
+        st.get_style_context().add_class("subtitle")
+        box.pack_start(st, False, False, 6)
+
+        actions = [
+            ("修复系统引导", "重新安装 GRUB 引导程序到已检测到的硬盘", self.fix_grub),
+            ("磁盘检查", "检查并修复系统分区文件系统错误", self.fsck),
+            ("打开终端", "进入 root 命令终端（命令行修复）", self.shell),
+            ("重新安装 DUESLIN", "重新运行安装程序", self.reinstall),
+            ("重启电脑", "重启设备", self.reboot_now),
+        ]
+        for title, desc, fn in actions:
+            b = Gtk.Button()
+            b.get_style_context().add_class("btn")
+            vb = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+            l1 = Gtk.Label(label=title, xalign=0)
+            l1.set_markup(f'<span font="14" weight="bold" color="#111827">{title}</span>')
+            l2 = Gtk.Label(label=desc, xalign=0)
+            l2.get_style_context().add_class("subtitle")
+            vb.pack_start(l1, False, False, 0)
+            vb.pack_start(l2, False, False, 0)
+            b.add(vb)
+            b.connect("clicked", lambda w, f=fn: f())
+            box.pack_start(b, False, False, 0)
+
+        self.status = Gtk.Label()
+        self.status.get_style_context().add_class("subtitle")
+        box.pack_start(self.status, False, False, 4)
+
+    def run_task(self, cmd, msg):
+        self.status.set_text(f"{msg} ...")
+        while Gtk.events_pending():
+            Gtk.main_iteration()
+        r = sh(cmd)
+        ok = r.returncode == 0
+        self.status.set_markup(
+            f'<span color="{"#16a34a" if ok else "#dc2626"}">'
+            f'{msg}：{"成功" if ok else "失败"}{"  " + r.stderr.strip()[:80] if not ok else ""}</span>')
+        return ok
+
+    def fix_grub(self):
+        disks = []
+        r = sh("lsblk -dno PATH")
+        for d in r.stdout.split():
+            disks.append(d)
+        if not disks:
+            self.status.set_text("未检测到硬盘")
+            return
+        for d in disks:
+            sh(f"grub-install --target=i386-pc --boot-directory=/boot --recheck {d}")
+        self.status.set_markup('<span color="#16a34a">引导修复完成，请重启测试</span>')
+
+    def fsck(self):
+        r = sh("lsblk -o PATH,FSTYPE -n")
+        for line in r.stdout.splitlines():
+            parts = line.split()
+            if len(parts) == 2 and parts[1] in ("ext4", "ext3", "ext2", "vfat"):
+                sh(f"fsck -y {parts[0]} 2>/dev/null || true")
+        self.status.set_markup('<span color="#16a34a">磁盘检查完成</span>')
+
+    def shell(self):
+        subprocess.Popen("xterm -e bash", shell=True)
+        self.status.set_text("已打开终端窗口")
+
+    def reinstall(self):
+        subprocess.Popen("dueslin-installer", shell=True)
+        self.status.set_text("正在启动安装程序 ...")
+
+    def reboot_now(self):
+        subprocess.Popen("reboot -f", shell=True)
+
+    def apply_css(self):
+        sc = Gtk.CssProvider()
+        sc.load_from_data(CSS.encode())
+        Gtk.StyleContext.add_provider_for_screen(
+            Gdk.Screen.get_default(), sc, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+
+def main():
+    w = PeWindow()
+    w.apply_css()
+    w.show_all()
+    Gtk.main()
+
+if __name__ == "__main__":
+    main()

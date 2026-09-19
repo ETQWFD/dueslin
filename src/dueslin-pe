@@ -1,0 +1,102 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+DUESLIN PE 修复模式控制
+  dueslin-pe enable   -> 启用 PE 修复模式（pe te=1）
+  dueslin-pe disable  -> 卸载 PE 修复模式（pe te=2）
+在已安装系统上，PE 数据位于 /boot/pe/（安装时已复制）。
+启用 = 写入标记 + 重新生成 grub.cfg（出现 PE 菜单项）
+"""
+import os
+import re
+import subprocess
+import sys
+
+PE_DIR = "/boot/pe"
+ENABLED = os.path.join(PE_DIR, "ENABLED")
+GRUB_CFG = "/boot/grub/grub.cfg"
+TEMPLATE = "/etc/dueslin/grub.cfg.template"
+
+def get_root_device():
+    """根据 /proc/cmdline 里的 root= 参数或 /etc/fstab 找到根设备"""
+    try:
+        with open("/proc/cmdline") as f:
+            m = re.search(r"root=([^\s]+)", f.read())
+        if m:
+            return m.group(1)
+    except Exception:
+        pass
+    try:
+        with open("/etc/fstab") as f:
+            for line in f:
+                if line.startswith("#"):
+                    continue
+                parts = line.split()
+                if len(parts) >= 2 and parts[1] == "/":
+                    return parts[0]
+    except Exception:
+        pass
+    return None
+
+def gen_grub_cfg(pe_enabled):
+    """从模板生成 grub.cfg，包含 root 设备与 PE 菜单项"""
+    root = get_root_device() or "UUID=please-set"
+    if not os.path.exists(TEMPLATE):
+        print(f"[DUESLIN] 找不到模板 {TEMPLATE}，跳过 grub 生成")
+        return False
+    try:
+        with open(TEMPLATE) as f:
+            tpl = f.read()
+        cfg = tpl.replace("__ROOT__", root)
+        if pe_enabled:
+            cfg = cfg.replace("__PE_ENTRY__", PE_ENTRY_BLOCK)
+        else:
+            cfg = cfg.replace("__PE_ENTRY__", "")
+        with open(GRUB_CFG, "w") as f:
+            f.write(cfg)
+        return True
+    except Exception as e:
+        print(f"[DUESLIN] 生成 grub.cfg 失败: {e}")
+        return False
+
+PE_ENTRY_BLOCK = """menuentry "DUESLIN 修复模式 (PE)" {
+  search --no-floppy --set=root --file /boot/pe/pe.squashfs
+  linux /boot/pe/vmlinuz dueslin_mode=pe rw quiet
+  initrd /boot/pe/initramfs
+}
+"""
+
+def ensure_pe_data():
+    """PE 数据是否完整（内核/initramfs/squashfs 三者齐全）"""
+    return all(os.path.exists(os.path.join(PE_DIR, n)) for n in
+               ("vmlinuz", "initramfs", "pe.squashfs"))
+
+def enable():
+    if not ensure_pe_data():
+        print("[DUESLIN] PE 数据不完整，请重新安装系统或修复 /boot/pe 目录")
+        sys.exit(1)
+    with open(ENABLED, "w") as f:
+        f.write("1\n")
+    gen_grub_cfg(True)
+    print("[DUESLIN] PE 修复模式已启用。重启后开机菜单将出现“DUESLIN 修复模式 (PE)”")
+    print("          提示: 重启时在开机菜单选择该项即可进入修复环境")
+
+def disable():
+    if os.path.exists(ENABLED):
+        os.remove(ENABLED)
+    gen_grub_cfg(False)
+    print("[DUESLIN] PE 修复模式已卸载。")
+
+def status():
+    if os.path.exists(ENABLED):
+        print("PE 修复模式: 已启用")
+    else:
+        print("PE 修复模式: 未启用")
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2 or sys.argv[1] not in ("enable", "disable", "status"):
+        print("用法: dueslin-pe enable|disable|status")
+        sys.exit(1)
+    if os.geteuid() != 0:
+        os.execvp("sudo", ["sudo"] + sys.argv)
+    {"enable": enable, "disable": disable, "status": status}[sys.argv[1]]()

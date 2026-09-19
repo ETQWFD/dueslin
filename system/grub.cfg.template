@@ -1,0 +1,34 @@
+# DUESLIN 已安装系统 GRUB 配置模板
+# __ROOT__ 由安装器/dueslin-pe 替换为实际根设备
+# __PE_ENTRY__ 由 dueslin-pe 插入 PE 菜单项（pe te=1/2 控制）
+
+set default=0
+set timeout=3
+
+set gfxmode=auto
+set gfxpayload=keep
+insmod all_video
+insmod gfxterm
+terminal_output gfxterm
+insmod part_gpt
+insmod part_msdos
+insmod ext2
+insmod vfat
+
+search --no-floppy --set=root --label DUESLIN
+
+menuentry "DUESLIN" {
+    linux /boot/vmlinuz-lts root=__ROOT__ rw quiet splash
+    initrd /boot/initramfs-lts
+}
+
+if [ -f /boot/pe/ENABLED ]; then
+__PE_ENTRY__
+fi
+
+menuentry "DUESLIN: System info" {
+    insmod all_video
+    echo "DUESLIN 1.0 - Linux kernel based lightweight desktop"
+    echo "Press e to edit boot options, c for command line."
+    sleep 5
+}

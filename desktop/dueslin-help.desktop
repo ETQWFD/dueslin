@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=DUESLIN 命令手册
+GenericName=Command Manual
+Comment=打开 DUESLIN 命令手册
+Exec=xfce4-terminal --title="DUESLIN 命令手册" -e bash -c 'cat /usr/share/dueslin/COMMANDS.md; echo; read -p "按回车关闭 ..."'
+Icon=/usr/share/dueslin/logo-48.png
+Terminal=false
+Categories=System;Utility;Documentation;

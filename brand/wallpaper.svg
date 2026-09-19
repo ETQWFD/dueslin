@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080" width="1920" height="1080">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0.8" y2="1">
+      <stop offset="0%" stop-color="#f2f8ff"/>
+      <stop offset="55%" stop-color="#e9f2fb"/>
+      <stop offset="100%" stop-color="#e2eef8"/>
+    </linearGradient>
+    <radialGradient id="glow1" cx="0.18" cy="0.22" r="0.5">
+      <stop offset="0%" stop-color="#bfdbfe" stop-opacity="0.55"/>
+      <stop offset="100%" stop-color="#bfdbfe" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glow2" cx="0.85" cy="0.78" r="0.42">
+      <stop offset="0%" stop-color="#99f6e4" stop-opacity="0.4"/>
+      <stop offset="100%" stop-color="#99f6e4" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="mark" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#2563eb"/>
+      <stop offset="100%" stop-color="#06b6d4"/>
+    </linearGradient>
+  </defs>
+  <!-- 背景 -->
+  <rect width="1920" height="1080" fill="url(#sky)"/>
+  <rect width="1920" height="1080" fill="url(#glow1)"/>
+  <rect width="1920" height="1080" fill="url(#glow2)"/>
+
+  <!-- 柔和几何点缀 -->
+  <g opacity="0.5">
+    <circle cx="1560" cy="180" r="90" fill="none" stroke="#93c5fd" stroke-width="1.5"/>
+    <circle cx="1660" cy="280" r="46" fill="none" stroke="#a5b4fc" stroke-width="1.5"/>
+    <rect x="240" y="760" width="130" height="130" rx="30" fill="#ffffff" opacity="0.55"/>
+    <circle cx="330" cy="810" r="12" fill="#93c5fd" opacity="0.6"/>
+  </g>
+
+  <!-- 底部淡色分隔光带 -->
+  <rect x="0" y="1036" width="1920" height="2" fill="#dbeafe" opacity="0.8"/>
+
+  <!-- 右下角品牌 -->
+  <g transform="translate(1520 950)">
+    <rect x="0" y="0" width="52" height="52" rx="13" fill="url(#mark)"/>
+    <path d="M13 13 H21 A16 16 0 1 1 21 39 H13 Z" fill="#ffffff"/>
+    <text x="66" y="30" font-family="DejaVu Sans, sans-serif" font-size="22"
+          font-weight="bold" fill="#475569" letter-spacing="2">DUESLIN</text>
+    <text x="66" y="48" font-family="DejaVu Sans, sans-serif" font-size="12"
+          fill="#94a3b8">简洁 · 快速 · 兼容旧设备</text>
+  </g>
+</svg>

@@ -1,0 +1,15 @@
+# DUESLIN WIM 捕获排除配置
+[ExclusionList]
+/proc/*
+/sys/*
+/dev/*
+/tmp/*
+/run/*
+/mnt/*
+/media/*
+/var/cache/*
+/var/log/*
+/var/tmp/*
+/root/.cache/*
+/boot/grub/*
+/dueslin-src/*

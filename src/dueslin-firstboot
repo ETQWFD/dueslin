@@ -1,0 +1,297 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+DUESLIN 首次启动向导
+创建用户与密码 -> WiFi 配置 -> 驱动初始化 -> 进入桌面
+通过 lightdm 的 dueslin-firstboot 会话启动；完成后切换为 xfce 会话。
+"""
+import os
+import re
+import sys
+import subprocess
+import threading
+
+import gi
+gi.require_version("Gtk", "3.0")
+from gi.repository import Gtk, GLib, Gdk
+
+BRAND = "#2563eb"
+BG = "#f5f7fa"
+
+CSS = f"""
+window {{ background: {BG}; }}
+.card {{ background: #ffffff; border-radius: 14px; }}
+.title {{ font-size: 24px; font-weight: 700; color: #111827; }}
+.subtitle {{ font-size: 13px; color: #6b7280; }}
+entry {{ min-height: 36px; border-radius: 8px; }}
+.primary {{ background: {BRAND}; color: white; border-radius: 8px; padding: 10px 24px; }}
+.primary:hover {{ background: #1d4ed8; }}
+.secondary {{ background: #e5e7eb; color: #374151; border-radius: 8px; padding: 10px 24px; }}
+"""
+
+def sh(cmd, **kw):
+    return subprocess.run(cmd, shell=True, capture_output=True, text=True, **kw)
+
+def sudo(cmd):
+    if os.geteuid() == 0:
+        return sh(cmd)
+    return sh("sudo " + cmd)
+
+def is_valid_user(name):
+    return re.match(r"^[a-z_][a-z0-9_-]{2,31}$", name) is not None
+
+def wifi_list():
+    try:
+        r = subprocess.run(["nmcli", "-t", "-f", "SSID,SIGNAL,SECURITY", "dev", "wifi", "list"],
+                           capture_output=True, text=True, timeout=15)
+        out = []
+        for line in r.stdout.splitlines():
+            parts = line.split(":")
+            if len(parts) >= 3 and parts[0]:
+                out.append({"ssid": parts[0], "sig": parts[1],
+                            "sec": parts[2] if parts[2] != "" else "开放"})
+        return out
+    except Exception:
+        return []
+
+class FirstBootWindow(Gtk.Window):
+    def __init__(self):
+        super().__init__(title="DUESLIN 首次设置")
+        self.set_default_size(860, 580)
+        self.set_position(Gtk.WindowPosition.CENTER)
+        self.connect("delete-event", lambda w, e: True)  # 不允许关闭
+
+        self.outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        self.add(self.outer)
+        self.stack = Gtk.Stack()
+        self.stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
+        self.outer.pack_start(self.stack, True, True, 0)
+        self.step = 0
+        self.user = ""
+        self.passwd = ""
+        self.wifi_ssid = ""
+        self.wifi_pwd = ""
+        self.cur_net_state = Gtk.Label()
+
+        self.build_user_page()
+        self.build_wifi_page()
+        self.build_driver_page()
+        self.build_done_page()
+        self.stack.set_visible_child_name("user")
+
+    # ---------------- 页面 1: 用户 ----------------
+    def build_user_page(self):
+        box = self.page_base("创建你的账户", "设置用户名与密码，之后每次登录都会用到")
+        self.name_entry = Gtk.Entry(placeholder_text="用户名（如 dueslin）")
+        self.pwd_entry = Gtk.Entry(placeholder_text="密码")
+        self.pwd_entry.set_visibility(False)
+        self.pwd2_entry = Gtk.Entry(placeholder_text="再次输入密码")
+        self.pwd2_entry.set_visibility(False)
+        err = Gtk.Label()
+        err.get_style_context().add_class("subtitle")
+        self.user_err = err
+        for e in (self.name_entry, self.pwd_entry, self.pwd2_entry):
+            e.set_margin_bottom(8)
+            box.pack_start(e, False, False, 0)
+        box.pack_start(err, False, False, 0)
+
+        btn = Gtk.Button(label="下一步  →")
+        btn.get_style_context().add_class("primary")
+        btn.connect("clicked", self.on_user_next)
+        box.pack_start(btn, False, False, 8)
+
+    def on_user_next(self, w):
+        name = self.name_entry.get_text().strip()
+        p1 = self.pwd_entry.get_text()
+        p2 = self.pwd2_entry.get_text()
+        if not is_valid_user(name):
+            self.user_err.set_markup('<span color="#dc2626">用户名只能是小写字母/数字/下划线，3-32 位</span>')
+            return
+        if len(p1) < 4:
+            self.user_err.set_markup('<span color="#dc2626">密码至少 4 位</span>')
+            return
+        if p1 != p2:
+            self.user_err.set_markup('<span color="#dc2626">两次输入的密码不一致</span>')
+            return
+        self.user, self.passwd = name, p1
+        self.step = 1
+        self.stack.set_visible_child_name("wifi")
+        self.refresh_wifi()
+
+    # ---------------- 页面 2: WiFi ----------------
+    def build_wifi_page(self):
+        box = self.page_base("连接网络（可跳过）", "选择要连接的 WiFi 网络")
+        self.wifi_listbox = Gtk.ListBox()
+        self.wifi_listbox.set_selection_mode(Gtk.SelectionMode.SINGLE)
+        sc = Gtk.ScrolledWindow()
+        sc.set_min_content_height(220)
+        sc.add(self.wifi_listbox)
+        box.pack_start(sc, True, True, 6)
+
+        row = Gtk.ListBoxRow()
+        lb = Gtk.Label(label="跳过，暂不连接网络")
+        lb.set_margin_top(12); lb.set_margin_bottom(12)
+        row.add(lb)
+        self.wifi_listbox.add(row)
+
+        self.wifi_pwd_entry = Gtk.Entry(placeholder_text="WiFi 密码（开放网络可留空）")
+        self.wifi_pwd_entry.set_visibility(False)
+        box.pack_start(self.wifi_pwd_entry, False, False, 6)
+
+        hb = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        back = Gtk.Button(label="← 上一步")
+        back.get_style_context().add_class("secondary")
+        back.connect("clicked", lambda w: self.stack.set_visible_child_name("user"))
+        nxt = Gtk.Button(label="下一步  →")
+        nxt.get_style_context().add_class("primary")
+        nxt.connect("clicked", self.on_wifi_next)
+        hb.pack_end(nxt, False, False, 0)
+        hb.pack_end(back, False, False, 0)
+        box.pack_start(hb, False, False, 8)
+
+    def refresh_wifi(self):
+        for r in self.wifi_listbox.get_children():
+            self.wifi_listbox.remove(r)
+        row = Gtk.ListBoxRow()
+        lb = Gtk.Label(label="跳过，暂不连接网络")
+        lb.set_margin_top(12); lb.set_margin_bottom(12)
+        row.add(lb)
+        self.wifi_listbox.add(row)
+        for n in wifi_list():
+            r = Gtk.ListBoxRow()
+            b = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+            b.set_margin_start(8); b.set_margin_end(8)
+            b.set_margin_top(6); b.set_margin_bottom(6)
+            t = Gtk.Label(label=n["ssid"], xalign=0)
+            t.set_hexpand(True)
+            s = Gtk.Label(label=f'{n["sig"]}%  ·  {n["sec"]}')
+            s.get_style_context().add_class("subtitle")
+            b.pack_start(t, True, True, 0)
+            b.pack_start(s, False, False, 0)
+            r.add(b)
+            self.wifi_listbox.add(r)
+        self.wifi_listbox.show_all()
+
+    def on_wifi_next(self, w):
+        sel = self.wifi_listbox.get_selected_row()
+        if sel is not None:
+            # 跳过行为第 0 项
+            if sel.get_index() > 0:
+                self.wifi_ssid = sel.get_children()[0].get_children()[0].get_label()
+                self.wifi_pwd = self.wifi_pwd_entry.get_text()
+                print(f"[FIRSTBOOT] 选择 WiFi: {self.wifi_ssid}")
+        self.step = 2
+        self.stack.set_visible_child_name("driver")
+        self.start_drivers()
+
+    # ---------------- 页面 3: 驱动初始化 ----------------
+    def build_driver_page(self):
+        box = self.page_base("正在配置系统", "初始化驱动与环境，请稍候 ...")
+        self.prog = Gtk.ProgressBar()
+        self.prog.set_show_text(True)
+        box.pack_start(self.prog, False, False, 10)
+        st = Gtk.Label(label="准备中 ...")
+        st.get_style_context().add_class("subtitle")
+        self.drv_status = st
+        box.pack_start(st, False, False, 4)
+
+    def start_drivers(self):
+        th = threading.Thread(target=self.run_driver_setup, daemon=True)
+        th.start()
+
+    def set_status(self, txt, pct=None):
+        GLib.idle_add(self.drv_status.set_text, txt)
+        if pct is not None:
+            GLib.idle_add(self.prog.set_fraction, pct / 100.0)
+            GLib.idle_add(self.prog.set_text, f"{pct}%")
+
+    def run_driver_setup(self):
+        steps = [
+            ("启用系统服务 ...", "rc-update add dbus default && rc-update add eudev default && rc-update add elogind default && rc-update add networkmanager default && rc-update add bluetooth default && rc-update add alsa default && rc-update add pipewire default", 15),
+            ("初始化内核模块 ...", "depmod -a; modprobe -a iwlwifi btusb snd_hda_intel 2>/dev/null; true", 30),
+            ("配置 WiFi ...", None, 50),
+            ("创建用户账户 ...", None, 75),
+            ("完成首启配置 ...", None, 95),
+        ]
+        for title, cmd, pct in steps:
+            self.set_status(title, pct)
+            if cmd:
+                sudo(cmd)
+            if title == "配置 WiFi ..." and self.wifi_ssid:
+                if self.wifi_pwd:
+                    sudo(f"nmcli dev wifi connect '{self.wifi_ssid}' password '{self.wifi_pwd}'")
+                else:
+                    sudo(f"nmcli dev wifi connect '{self.wifi_ssid}'")
+            if title == "创建用户账户 ...":
+                self.create_user()
+        self.set_status("全部完成！", 100)
+        GLib.idle_add(self.finish_firstboot)
+
+    def create_user(self):
+        sudo(f"id {self.user} 2>/dev/null || useradd -m -s /usr/bin/dueslin -G wheel,video,audio,netdev,users {self.user}")
+        sudo(f"echo '{self.user}:{self.passwd}' | chpasswd")
+        # 免密提权
+        sudo(f"echo '{self.user} ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/{self.user}")
+        # 桌面会话配置
+        sudo(f"mkdir -p /home/{self.user}/.config")
+        sudo(f"cp -r /etc/skel/.config/. /home/{self.user}/.config/ 2>/dev/null || true")
+        sudo(f"chown -R {self.user}:{self.user} /home/{self.user}")
+
+    def finish_firstboot(self):
+        # 清除首启标记，切换默认会话为 xfce
+        sudo("rm -f /etc/dueslin/.firstboot")
+        sudo("sed -i 's/^user-session=.*/user-session=xfce/' /etc/lightdm/lightdm.conf")
+        # 当前用户会话直接进入桌面
+        self.step = 3
+        self.stack.set_visible_child_name("done")
+
+    # ---------------- 页面 4: 完成 ----------------
+    def build_done_page(self):
+        box = self.page_base("设置完成", "欢迎使用 DUESLIN！")
+        t = Gtk.Label()
+        t.set_markup('<span font="26">🎉</span>')
+        box.pack_start(t, False, False, 10)
+        info = Gtk.Label()
+        info.set_markup('<span font="14" color="#374151">正在进入桌面 ...</span>')
+        box.pack_start(info, False, False, 4)
+
+        def enter_desktop(w):
+            os.environ["DUESLIN_SHELL"] = "1"
+            subprocess.Popen("xfce4-session", shell=True)
+            Gtk.main_quit()
+        btn = Gtk.Button(label="进入桌面")
+        btn.get_style_context().add_class("primary")
+        btn.connect("clicked", enter_desktop)
+        box.pack_start(btn, False, False, 10)
+
+    # ---------------- 通用 ----------------
+    def page_base(self, title, subtitle):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        box.set_margin_top(40); box.set_margin_start(48)
+        box.set_margin_end(48); box.set_margin_bottom(30)
+        t = Gtk.Label()
+        t.set_markup(f'<span font="22" weight="bold" color="#111827">{title}</span>')
+        t.set_halign(Gtk.Align.START)
+        st = Gtk.Label(label=subtitle)
+        st.get_style_context().add_class("subtitle")
+        st.set_halign(Gtk.Align.START)
+        st.set_margin_bottom(16)
+        box.pack_start(t, False, False, 0)
+        box.pack_start(st, False, False, 0)
+        return box
+
+    def apply_css(self):
+        sc = Gtk.CssProvider()
+        sc.load_from_data(CSS.encode())
+        Gtk.StyleContext.add_provider_for_screen(
+            Gdk.Screen.get_default(), sc,
+            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+
+def main():
+    w = FirstBootWindow()
+    w.apply_css()
+    w.show_all()
+    Gtk.main()
+
+if __name__ == "__main__":
+    main()

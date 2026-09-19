@@ -1,0 +1,311 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+DUESLIN Shell — 全新简化命令系统
+DUESLIN Operating System Command Interpreter
+
+命令风格与 cmd / Linux 终端相同，但命令更简洁：
+  install <包>        安装软件        update 更新源
+  remove <包>         卸载软件        upgrade 升级系统
+  files               查看文件        goto <目录> 进入目录
+  open <文件>         打开文件        run <应用> 启动应用
+  wifi                查看WiFi        wifi connect <SSID> [密码]
+  net                 网络状态        lock 锁屏
+  shutdown 关机        reboot 重启     pe te=1 进入PE修复  pe te=2 卸载PE
+  su retc             提权到最高权限  task 打开任务管理器
+  help                命令手册        clear 清屏
+其余 Linux / cmd 常用命令（ls、cat、ping…）同样可以直接使用。
+"""
+import os
+import sys
+import readline
+import subprocess
+import shutil
+import time
+
+VERSION = "1.0.0"
+BUILD = "DUESLIN 1.0 'Qingfeng'"
+
+# ---------------------------------------------------------------- 别名表
+# 简化包名 -> 真实包名（Alpine apk）
+PKG_ALIAS = {
+    "python": "python3", "python3": "python3", "pip": "py3-pip",
+    "firefox": "firefox", "browser": "firefox",
+    "vim": "vim", "nano": "nano", "wget": "wget", "curl": "curl",
+    "zip": "unzip", "unzip": "unzip", "7z": "p7zip", "rar": "unrar",
+    "git": "git", "htop": "htop", "tmux": "tmux",
+    "chrome": "chromium", "vlc": "vlc", "mpv": "mpv",
+    "gimp": "gimp", "libreoffice": "libreoffice", "office": "libreoffice",
+    "gcc": "gcc", "g++": "g++", "make": "make", "node": "nodejs",
+    "java": "openjdk17", "nginx": "nginx", "docker": "docker",
+    "ssh": "openssh", "scp": "openssh-client",
+}
+
+HISTORY_FILE = os.path.expanduser("~/.dueslin_history")
+
+def real_pkg(name):
+    return PKG_ALIAS.get(name.strip().lower(), name.strip())
+
+def run(cmd, need_root=False):
+    """执行系统命令，需要 root 时自动加 sudo"""
+    if need_root and os.geteuid() != 0:
+        cmd = "sudo " + cmd
+    return subprocess.call(cmd, shell=True)
+
+# ---------------------------------------------------------------- 命令实现
+def cmd_install(args):
+    if not args:
+        print("用法: install <软件包名>  例如: install python")
+        return
+    pkgs = " ".join(real_pkg(a) for a in args)
+    print(f"[DUESLIN] 正在安装: {pkgs} ...")
+    run(f"apk add --no-cache {pkgs}", need_root=True)
+
+def cmd_remove(args):
+    if not args:
+        print("用法: remove <软件包名>  例如: remove python")
+        return
+    pkgs = " ".join(real_pkg(a) for a in args)
+    print(f"[DUESLIN] 正在卸载: {pkgs} ...")
+    run(f"apk del {pkgs}", need_root=True)
+
+def cmd_update(args):
+    print("[DUESLIN] 正在更新软件源 ...")
+    run("apk update", need_root=True)
+
+def cmd_upgrade(args):
+    print("[DUESLIN] 正在升级系统 ...")
+    run("apk upgrade", need_root=True)
+
+def cmd_files(args):
+    run("ls -la --color=auto " + " ".join(args))
+
+def cmd_goto(args):
+    if not args:
+        print("用法: goto <目录>  例如: goto /home")
+        return
+    path = os.path.expanduser(args[0])
+    try:
+        os.chdir(path)
+        print(f"[DUESLIN] 已进入: {os.getcwd()}")
+    except OSError as e:
+        print(f"[DUESLIN] 无法进入目录: {e}")
+
+def cmd_open(args):
+    if not args:
+        print("用法: open <文件>  例如: open 图片.png")
+        return
+    run("xdg-open " + " ".join(f"'{a}'" for a in args))
+
+def cmd_run(args):
+    if not args:
+        print("用法: run <应用名>  例如: run firefox")
+        return
+    run("nohup " + " ".join(args) + " >/dev/null 2>&1 &")
+
+def cmd_wifi(args):
+    if args and args[0] == "connect":
+        if len(args) < 2:
+            print("用法: wifi connect <WiFi名称> [密码]")
+            return
+        ssid = args[1]
+        pwd = args[2] if len(args) > 2 else ""
+        print(f"[DUESLIN] 正在连接 WiFi: {ssid} ...")
+        if pwd:
+            run(f"nmcli dev wifi connect '{ssid}' password '{pwd}'", need_root=True)
+        else:
+            run(f"nmcli dev wifi connect '{ssid}'", need_root=True)
+    else:
+        run("nmcli -f SSID,SIGNAL,SECURITY dev wifi list")
+
+def cmd_net(args):
+    run("nmcli general status && nmcli -f DEVICE,TYPE,STATE connection show")
+
+def cmd_lock(args):
+    run("loginctl lock-session || xflock4")
+
+def cmd_shutdown(args):
+    run("loginctl poweroff || systemctl poweroff", need_root=True)
+
+def cmd_reboot(args):
+    run("loginctl reboot || systemctl reboot", need_root=True)
+
+def cmd_pe(args):
+    # pe te=1 启用 PE 修复模式；pe te=2 卸载 PE
+    if len(args) >= 2 and args[0] == "te":
+        if args[1] == "1":
+            print("[DUESLIN] 正在启用 PE 修复模式 ...")
+            run("dueslin-pe enable", need_root=True)
+        elif args[1] == "2":
+            print("[DUESLIN] 正在卸载 PE 修复模式 ...")
+            run("dueslin-pe disable", need_root=True)
+        else:
+            print("用法: pe te=1 进入PE修复模式 | pe te=2 卸载PE")
+    else:
+        print("用法: pe te=1 进入PE修复模式 | pe te=2 卸载PE")
+
+def cmd_su(args):
+    # su retc -> 提权到最高权限
+    if args and args[0] == "retc":
+        print("[DUESLIN] 正在提权到最高权限 (retc) ...")
+        if os.geteuid() == 0:
+            print("[DUESLIN] 当前已是最高权限。")
+            return
+        # 若 retc 用户设置了密码则用 su，否则直接 sudo 免密提权
+        try:
+            with open("/etc/shadow") as f:
+                shadow = {l.split(":")[0]: l.split(":")[1] for l in f if ":" in l}
+            retc_pw = shadow.get("retc", "")
+            if retc_pw not in ("", "!", "*", "!!"):
+                run("su retc")
+            else:
+                print("[DUESLIN] retc 未设置密码，直接提权 ...")
+                run("sudo -i")
+        except Exception:
+            run("sudo -i")
+    else:
+        run("su " + " ".join(args))
+
+def cmd_task(args):
+    run("nohup dueslin-taskmgr >/dev/null 2>&1 &")
+
+def cmd_help(args):
+    print(HELP_TEXT)
+
+def cmd_about(args):
+    print(f"{BUILD}")
+    print(f"Shell 版本: {VERSION}")
+    print("基于 Alpine Linux / Linux 内核，支持旧机器（安装仅需 400MB+ 磁盘，1GB 内存）")
+    print("输入 help 查看命令手册")
+
+def cmd_clear(args):
+    os.system("clear")
+
+def cmd_exit(args):
+    print("再见，DUESLIN 随时欢迎你回来。")
+    sys.exit(0)
+
+HELP_TEXT = """\
+══════════════════════ DUESLIN 命令手册 ══════════════════════
+【软件】
+  install <软件包>         安装软件，如: install python
+  remove <软件包>          卸载软件
+  update                   更新软件源
+  upgrade                  升级整个系统
+
+【文件与目录】
+  files                    查看当前目录文件
+  goto <目录>              进入目录，如: goto /home
+  here                     显示当前所在位置
+  open <文件>              打开文件/图片/文档
+  find <名称>              查找文件
+
+【网络】
+  wifi                     扫描并列出附近 WiFi
+  wifi connect <名称> [密码]  连接 WiFi
+  net                      查看网络状态
+  ping <地址>              测试网络连通
+
+【系统】
+  shutdown                 关闭电脑
+  reboot                   重启电脑
+  lock                     锁屏
+  task                     打开任务管理器
+  about                    系统信息
+  pe te=1                  进入 PE 修复模式（安装/卸载修复环境）
+  pe te=2                  卸载 PE 修复模式
+  su retc                  提权到最高权限（retc）
+
+【其他】
+  clear                    清屏
+  history                  查看历史命令
+  exit / quit              退出终端
+  help                     显示本手册
+
+【提示】Linux / cmd 常用命令（ls、cd、cat、cp、mv、ping 等）
+ 在 DUESLIN 中同样可以直接使用，用法完全一致。
+══════════════════════════════════════════════════════════════
+"""
+
+COMMANDS = {
+    "install": cmd_install, "remove": cmd_remove, "update": cmd_update,
+    "upgrade": cmd_upgrade, "files": cmd_files, "goto": cmd_goto,
+    "here": lambda a: print(os.getcwd()), "open": cmd_open, "run": cmd_run,
+    "wifi": cmd_wifi, "net": cmd_net, "lock": cmd_lock,
+    "shutdown": cmd_shutdown, "reboot": cmd_reboot, "pe": cmd_pe,
+    "su": cmd_su, "task": cmd_task, "help": cmd_help, "about": cmd_about,
+    "clear": cmd_clear, "exit": cmd_exit, "quit": cmd_exit,
+    "find": lambda a: run("find . -name '*" + (a[0] if a else "") + "*' 2>/dev/null | head -50"),
+    "history": lambda a: show_history(),
+}
+
+def show_history():
+    try:
+        h = readline.get_history_length()
+        for i in range(1, h + 1):
+            print(f"{i:4d}  {readline.get_history_item(i)}")
+    except Exception:
+        pass
+
+def welcome():
+    os.system("clear")
+    print(BUILD)
+    print("输入 help 查看命令手册。Linux/cmd 常用命令同样可用。")
+    print()
+
+def main():
+    if len(sys.argv) > 1:
+        # 非交互模式：当作系统命令执行
+        cmd = " ".join(sys.argv[1:])
+        sys.exit(subprocess.call(cmd, shell=True))
+
+    if os.environ.get("DUESLIN_SHELL") == "0":
+        # 允许退回 bash
+        os.execvp("bash", ["bash"])
+
+    welcome()
+    try:
+        readline.read_history_file(HISTORY_FILE)
+    except Exception:
+        pass
+    readline.set_history_length(500)
+
+    while True:
+        try:
+            user = os.environ.get("USER", "user")
+            host = os.uname().nodename
+            cwd = os.getcwd().replace(os.path.expanduser("~"), "~")
+            prompt = f"dueslin@{host}:{cwd}$ "
+            line = input(prompt).strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            continue
+        if not line:
+            continue
+        try:
+            readline.add_history(line)
+        except Exception:
+            pass
+        parts = line.split()
+        cmd = parts[0].lower()
+        args = parts[1:]
+        handler = COMMANDS.get(cmd)
+        if handler:
+            try:
+                handler(args)
+            except Exception as e:
+                print(f"[DUESLIN] 命令执行出错: {e}")
+        else:
+            # 未匹配到 DUESLIN 命令 -> 交给系统终端执行
+            if shutil.which(parts[0]):
+                run(line)
+            else:
+                print(f"未知命令: {cmd}（输入 help 查看命令手册）")
+
+    try:
+        readline.write_history_file(HISTORY_FILE)
+    except Exception:
+        pass
+
+if __name__ == "__main__":
+    main()

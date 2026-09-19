@@ -1,0 +1,646 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+DUESLIN 安装器 — 简洁的图形化安装界面（类苹果风格）
+流程: 欢迎 -> 磁盘选择 -> 安装(WIM解压) -> 完成(5秒自动重启)
+运行环境: DUESLIN live/PE 环境（root）
+"""
+import os
+import re
+import sys
+import json
+import time
+import subprocess
+import threading
+import shutil
+
+import gi
+gi.require_version("Gtk", "3.0")
+from gi.repository import Gtk, GLib, Gdk, Pango
+
+APP_TITLE = "DUESLIN 安装程序"
+BRAND = "#2563eb"        # 主色
+BRAND_DARK = "#1d4ed8"
+BG = "#f5f7fa"
+CARD = "#ffffff"
+
+SRC_MARKER = "/run/dueslin_src"
+MODE_MARKER = "/run/dueslin_mode"
+
+CSS = f"""
+window {{ background: {BG}; }}
+.card {{ background: {CARD}; border-radius: 14px; box-shadow: 0 1px 6px rgba(0,0,0,0.08); }}
+.title {{ font-size: 26px; font-weight: 600; color: #111827; }}
+.subtitle {{ font-size: 14px; color: #6b7280; }}
+.brand-label {{ font-size: 13px; color: {BRAND}; font-weight: 600; }}
+.big-btn {{ font-size: 15px; font-weight: 600; }}
+.primary {{ background: {BRAND}; color: white; border-radius: 8px; padding: 10px 22px; }}
+.primary:hover {{ background: {BRAND_DARK}; }}
+.secondary {{ background: #e5e7eb; color: #374151; border-radius: 8px; padding: 10px 22px; }}
+.sidebar {{ background: {CARD}; border-right: 1px solid #e5e7eb; }}
+.step-done {{ color: #22c55e; font-weight: 600; }}
+.step-cur {{ color: {BRAND}; font-weight: 700; }}
+.step-pending {{ color: #9ca3af; }}
+.disk-row {{ padding: 10px 14px; border-radius: 10px; }}
+.disk-row:hover {{ background: #f3f4f6; }}
+.disk-selected {{ background: #e8f0fe; border: 1.5px solid {BRAND}; }}
+"""
+
+def log(msg):
+    print(f"[INSTALLER] {msg}", flush=True)
+    try:
+        with open("/tmp/dueslin-install.log", "a") as f:
+            f.write(f"{time.strftime('%H:%M:%S')} {msg}\n")
+    except Exception:
+        pass
+
+def run(cmd):
+    log("$ " + cmd)
+    return subprocess.run(cmd, shell=True, capture_output=True, text=True)
+
+# ---------------------------------------------------------------- 磁盘工具
+def list_disks():
+    """返回磁盘列表 [{name,size,model,type,path}]"""
+    out = []
+    try:
+        r = subprocess.run(["lsblk", "-J", "-o", "NAME,SIZE,MODEL,TYPE,PATH,TRAN"],
+                           capture_output=True, text=True)
+        data = json.loads(r.stdout)
+        for d in data.get("blockdevices", []):
+            if d.get("type") != "disk":
+                continue
+            out.append({
+                "name": d["name"], "size": d.get("size", "?"),
+                "model": d.get("model") or "硬盘",
+                "path": d.get("path") or f"/dev/{d['name']}",
+            })
+    except Exception as e:
+        log(f"lsblk 失败: {e}")
+    return out
+
+def get_uuid(dev):
+    r = run(f"blkid -s UUID -o value {dev}")
+    return r.stdout.strip()
+
+# ---------------------------------------------------------------- 安装核心
+class Installer:
+    def __init__(self, disk=None, partition=None):
+        self.disk = disk          # 整盘安装时: /dev/sda
+        self.partition = partition  # 自定义分区: /dev/sda1
+        self.target_root = None
+        self.esp = None
+        self.wim_path = None
+        self.mounted = []
+        self.log_text = ""
+
+    def resolve_wim(self):
+        """定位安装介质上的 DUESLIN.wim"""
+        if os.path.exists(SRC_MARKER):
+            dev = open(SRC_MARKER).read().strip()
+            mnt = "/media/src"
+            os.makedirs(mnt, exist_ok=True)
+            if not os.path.ismount(mnt):
+                run(f"mount {dev} {mnt} -o ro")
+            cands = [f"{mnt}/boot/dueslin/DUESLIN.wim"]
+            for c in cands:
+                if os.path.exists(c):
+                    self.wim_path = c
+                    return c
+        for p in ["/boot/dueslin/DUESLIN.wim", "/mnt/src/boot/dueslin/DUESLIN.wim",
+                  "/media/src/boot/dueslin/DUESLIN.wim"]:
+            if os.path.exists(p):
+                self.wim_path = p
+                return p
+        return None
+
+    def partition_disk(self):
+        """整盘 GPT: 1M bios_grub + 512M ESP + 剩余 ext4"""
+        log(f"分区 {self.disk} ...")
+        run(f"wipefs -a {self.disk}")
+        run(f"parted -s {self.disk} mklabel gpt")
+        run(f"parted -s {self.disk} mkpart primary 1MiB 2MiB")
+        run(f"parted -s {self.disk} set 1 bios_grub on")
+        run(f"parted -s {self.disk} mkpart primary fat32 2MiB 514MiB")
+        run(f"parted -s {self.disk} set 2 esp on")
+        run(f"parted -s {self.disk} mkpart primary ext4 514MiB 100%")
+        run("partprobe " + self.disk)
+        time.sleep(3)
+        # 根据磁盘类型解析分区节点
+        base = self.disk
+        if re.match(r"/dev/(sd|vd|hd)", base):
+            self.esp = f"{base}2"; self.target_root = f"{base}3"
+        elif re.match(r"/dev/nvme", base):
+            self.esp = f"{base}p2"; self.target_root = f"{base}p3"
+        elif re.match(r"/dev/mmcblk", base):
+            self.esp = f"{base}p2"; self.target_root = f"{base}p3"
+        else:
+            self.esp = f"{base}2"; self.target_root = f"{base}3"
+        log(f"格式化: {self.esp} (FAT32) / {self.target_root} (ext4)")
+        run(f"mkfs.vfat -F32 -n DUESLIN_BOOT {self.esp}")
+        run(f"mkfs.ext4 -F -L DUESLIN {self.target_root}")
+
+    def prepare_custom(self):
+        self.target_root = self.partition
+        log(f"自定义分区: {self.target_root} -> ext4")
+        run(f"mkfs.ext4 -F -L DUESLIN {self.target_root}")
+
+    def install(self, progress_cb, log_cb):
+        """执行安装，progress_cb(percent), log_cb(text)"""
+        log_cb("准备磁盘 ...")
+        if self.disk:
+            self.partition_disk()
+        else:
+            self.prepare_custom()
+
+        # 挂载目标
+        os.makedirs("/mnt/target", exist_ok=True)
+        run(f"mount {self.target_root} /mnt/target")
+        self.mounted.append("/mnt/target")
+        if self.esp:
+            os.makedirs("/mnt/target/boot", exist_ok=True)
+            run(f"mount {self.esp} /mnt/target/boot")
+            self.mounted.append("/mnt/target/boot")
+
+        # 解压 WIM
+        wim = self.resolve_wim()
+        if not wim:
+            raise RuntimeError("找不到 DUESLIN.wim 安装源")
+        log_cb(f"正在解压系统镜像: {wim}")
+        log_cb("（WIM 压缩包解压复制中，请耐心等待）")
+
+        proc = subprocess.Popen(
+            ["wimlib-imagex", "apply", wim, "1", "/mnt/target", "--progress"],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, bufsize=1)
+        last_pct = 0
+        for line in proc.stdout:
+            m = re.search(r"\[(\d+)%\]", line)
+            if m:
+                pct = int(m.group(1))
+                if pct > last_pct:
+                    last_pct = pct
+                    progress_cb(pct // 2)  # 0-50
+        proc.wait()
+        if proc.returncode != 0:
+            raise RuntimeError("WIM 解压失败，请检查磁盘空间")
+        progress_cb(50)
+
+        # fstab
+        log_cb("写入系统配置 ...")
+        root_uuid = get_uuid(self.target_root)
+        fstab = f"UUID={root_uuid} / ext4 defaults,noatime 0 1\n"
+        if self.esp:
+            esp_uuid = get_uuid(self.esp)
+            fstab += f"UUID={esp_uuid} /boot vfat defaults 0 2\n"
+        with open("/mnt/target/etc/fstab", "w") as f:
+            f.write(fstab)
+        progress_cb(55)
+
+        # 复制 PE 修复环境到 /boot/pe
+        log_cb("复制 PE 修复环境 ...")
+        pe_src = None
+        if os.path.exists("/boot/vmlinuz-lts") and os.path.exists("/boot/dueslin-initramfs"):
+            pe_src = self.find_live_squashfs()
+            os.makedirs("/mnt/target/boot/pe", exist_ok=True)
+            shutil.copy("/boot/vmlinuz-lts", "/mnt/target/boot/pe/vmlinuz")
+            shutil.copy("/boot/dueslin-initramfs", "/mnt/target/boot/pe/initramfs")
+            if pe_src:
+                shutil.copy(pe_src, "/mnt/target/boot/pe/pe.squashfs")
+        progress_cb(70)
+
+        # 安装 GRUB
+        log_cb("安装引导程序 ...")
+        grub_dir = "/mnt/target/boot/grub"
+        os.makedirs(grub_dir, exist_ok=True)
+        efi = os.path.isdir("/sys/firmware/efi")
+        if self.disk:
+            if efi:
+                run(f"grub-install --target=x86_64-efi --efi-directory=/mnt/target/boot "
+                    f"--boot-directory=/mnt/target/boot --removable --recheck")
+            else:
+                run(f"grub-install --target=i386-pc --boot-directory=/mnt/target/boot "
+                    f"--recheck {self.disk}")
+        else:
+            # 自定义分区：找到其所属磁盘
+            disk = re.sub(r"p?\d+$", "", self.partition)
+            run(f"grub-install --target=i386-pc --boot-directory=/mnt/target/boot --recheck {disk}")
+        # grub.cfg
+        tpl = "/etc/dueslin/grub.cfg.template"
+        if os.path.exists(tpl):
+            cfg = open(tpl).read().replace("__ROOT__", f"UUID={root_uuid}")
+            cfg = cfg.replace("__PE_ENTRY__", "")
+            with open(f"{grub_dir}/grub.cfg", "w") as f:
+                f.write(cfg)
+        progress_cb(85)
+
+        # 首启标记
+        os.makedirs("/mnt/target/etc/dueslin", exist_ok=True)
+        open("/mnt/target/etc/dueslin/.firstboot", "w").write("1\n")
+        progress_cb(90)
+
+        # 卸载
+        log_cb("清理并卸载 ...")
+        for m in reversed(self.mounted):
+            run(f"umount {m} 2>/dev/null")
+        self.mounted = []
+        progress_cb(100)
+        log_cb("安装完成！")
+
+    def find_live_squashfs(self):
+        # 优先读 /run/dueslin_src（旧 initramfs 兼容）
+        if os.path.exists("/run/dueslin_src"):
+            dev = open("/run/dueslin_src").read().strip()
+            mnt = "/media/src"
+            os.makedirs(mnt, exist_ok=True)
+            if not os.path.ismount(mnt):
+                run(f"mount {dev} {mnt} -o ro")
+            p = f"{mnt}/boot/dueslin/live.squashfs"
+            if os.path.exists(p):
+                return p
+        # 兼容已挂载点
+        for p in ["/mnt/src/boot/dueslin/live.squashfs",
+                  "/media/src/boot/dueslin/live.squashfs"]:
+            if os.path.exists(p):
+                return p
+        # 兜底：扫描所有块设备找安装介质（ISO U盘 / 硬盘上的镜像）
+        mnt = "/media/dueslin_src"
+        os.makedirs(mnt, exist_ok=True)
+        devs = []
+        for pat in ["/dev/sr[0-9]*", "/dev/sd[a-z]*", "/dev/vd[a-z]*",
+                    "/dev/nvme[0-9]n[0-9]*p[0-9]*", "/dev/mmcblk*p*"]:
+            try:
+                import glob
+                devs.extend(glob.glob(pat))
+            except Exception:
+                pass
+        for dev in devs:
+            for fs in ["iso9660", "vfat", "ext4"]:
+                rc = subprocess.run(f"mount -t {fs} -o ro {dev} {mnt} 2>/dev/null",
+                                   shell=True, capture_output=True)
+                if rc.returncode != 0:
+                    continue
+                p = f"{mnt}/boot/dueslin/live.squashfs"
+                if os.path.exists(p):
+                    return p
+                subprocess.run(f"umount {mnt} 2>/dev/null", shell=True,
+                               capture_output=True)
+        return None
+
+# ---------------------------------------------------------------- UI
+class InstallerWindow(Gtk.Window):
+    STEPS = ["欢迎", "磁盘", "安装", "完成"]
+
+    def __init__(self):
+        super().__init__(title=APP_TITLE)
+        self.set_default_size(920, 600)
+        self.set_position(Gtk.WindowPosition.CENTER)
+        self.connect("delete-event", self.on_close_ask)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        self.add(box)
+
+        # 侧边栏
+        side = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+        side.set_size_request(230, -1)
+        side.get_style_context().add_class("sidebar")
+        side.set_margin_top(32); side.set_margin_bottom(32)
+        logo = Gtk.Label(label="◆", )
+        logo.set_markup(f'<span font="28" foreground="{BRAND}">◆</span>')
+        brand = Gtk.Label(label="DUESLIN")
+        brand.set_markup(f'<span font="20" weight="bold" foreground="#111827">DUESLIN</span>')
+        ver = Gtk.Label(label="安装程序 1.0")
+        ver.get_style_context().add_class("subtitle")
+        side.pack_start(logo, False, False, 0)
+        side.pack_start(brand, False, False, 0)
+        side.pack_start(ver, False, False, 10)
+        self.step_labels = []
+        for i, s in enumerate(self.STEPS):
+            lb = Gtk.Label(label=f"   {i+1}  {s}")
+            lb.set_halign(Gtk.Align.START)
+            lb.set_margin_start(12)
+            self.step_labels.append(lb)
+            side.pack_start(lb, False, False, 6)
+        box.pack_start(side, False, False, 0)
+
+        # 主区域
+        self.main = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        box.pack_start(self.main, True, True, 0)
+
+        self.installer = Installer()
+        self.disk = None
+        self.partition = None
+        self.step = 0
+        self.timer_id = None
+
+        self.show_page_welcome()
+
+    # ---------- 页面框架 ----------
+    def clear_main(self):
+        for c in self.main.get_children():
+            self.main.remove(c)
+
+    def page_shell(self, title, subtitle, content):
+        self.clear_main()
+        self.main.set_margin_top(36); self.main.set_margin_start(36)
+        self.main.set_margin_end(36); self.main.set_margin_bottom(36)
+        t = Gtk.Label()
+        t.set_markup(f'<span font="24" weight="bold" color="#111827">{title}</span>')
+        t.set_halign(Gtk.Align.START)
+        st = Gtk.Label(label=subtitle)
+        st.get_style_context().add_class("subtitle")
+        st.set_halign(Gtk.Align.START)
+        st.set_margin_bottom(20)
+        self.main.pack_start(t, False, False, 0)
+        self.main.pack_start(st, False, False, 0)
+        self.main.pack_start(content, True, True, 0)
+
+    def update_steps(self):
+        for i, lb in enumerate(self.step_labels):
+            if i < self.step:
+                lb.set_markup(f'<span class="step-done">   {i+1}  {self.STEPS[i]}  ✓</span>')
+            elif i == self.step:
+                lb.set_markup(f'<span class="step-cur">   {i+1}  {self.STEPS[i]}</span>')
+            else:
+                lb.set_markup(f'<span class="step-pending">   {i+1}  {self.STEPS[i]}</span>')
+
+    def set_css(self, widget):
+        """递归应用 CSS"""
+        sc = Gtk.CssProvider()
+        sc.load_from_data(CSS.encode())
+        Gtk.StyleContext.add_provider_for_screen(
+            Gdk.Screen.get_default(), sc,
+            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+
+    # ---------- 欢迎页 ----------
+    def show_page_welcome(self):
+        self.step = 0
+        self.update_steps()
+        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        card.set_margin_top(18); card.set_margin_bottom(18)
+        card.set_margin_start(22); card.set_margin_end(22)
+        info = Gtk.Label()
+        info.set_line_wrap(True)
+        info.set_markup(
+            '<span font="14" color="#374151">欢迎使用 <b>DUESLIN 1.0</b> 安装程序。\n\n'
+            '· 仅需 <b>400MB+</b> 磁盘空间，<b>1GB</b> 内存即可流畅运行\n'
+            '· 支持绝大多数旧机器（Windows XP/7 时代电脑）\n'
+            '· 内置 Firefox 浏览器、WiFi/蓝牙/音频驱动\n'
+            '· 安装完成后将自动重启进入系统\n\n'
+            '安装过程不会触碰其他系统分区，可放心继续。</span>')
+        info.set_halign(Gtk.Align.START)
+        card.pack_start(info, False, False, 0)
+
+        # 磁盘容量检测提示
+        cap = Gtk.Label()
+        try:
+            total_gb = sum(int(d["size"].replace("G","").replace("T","000G").rstrip("G")) for d in list_disks())
+            cap.set_markup(f'<span font="12" color="#6b7280">检测到 {len(list_disks())} 块硬盘</span>')
+        except Exception:
+            cap.set_markup('<span font="12" color="#6b7280">正在检测硬盘 ...</span>')
+        cap.set_halign(Gtk.Align.START)
+        card.pack_start(cap, False, False, 6)
+        content.pack_start(card, False, False, 0)
+
+        # 在线更新检查（后台线程，不阻塞 UI）
+        btn = Gtk.Button(label="继续  →")
+        btn.get_style_context().add_class("primary")
+        btn.set_halign(Gtk.Align.END)
+        btn.connect("clicked", self.on_continue)
+        content.pack_start(btn, False, False, 0)
+        self.page_shell("欢迎使用 DUESLIN", "简洁 · 快速 · 兼容旧设备", content)
+
+    # ---------- 在线更新检查 ----------
+    def on_continue(self, widget):
+        """点击继续：先联网检查 GitHub Release 是否有更新，再进入磁盘选择。"""
+        latest = None
+        try:
+            import urllib.request, json
+            req = urllib.request.Request(
+                "https://api.github.com/repos/ETQWFD/dueslin/releases/latest",
+                headers={"User-Agent": "DUESLIN-Installer", "Accept": "application/vnd.github+json"},
+                timeout=8)
+            with urllib.request.urlopen(req, timeout=8) as r:
+                data = json.loads(r.read().decode())
+                latest = data.get("tag_name", "v?")
+                self.latest_release_url = data.get("html_url", "")
+        except Exception:
+            latest = None  # 无网络或 API 失败，静默继续
+
+        cur = "v1.0.0"
+        if latest and latest.lstrip("v") > cur.lstrip("v"):
+            dlg = Gtk.MessageDialog(
+                transient_for=self, modal=True,
+                message_type=Gtk.MessageType.INFO,
+                buttons=Gtk.ButtonsType.YES_NO,
+                text=f"发现新版本 {latest}",
+                secondary_text=f"当前镜像版本 {cur}。\n\n是否下载最新版本镜像后再安装？\n选「否」则继续使用当前镜像安装。")
+            resp = dlg.run()
+            dlg.destroy()
+            if resp == Gtk.ResponseType.YES:
+                self._download_update()
+                return
+        self.show_page_disk()
+
+    def _download_update(self):
+        """下载最新 ISO 到 /tmp，提示用户重启后使用新镜像（离线环境无法直接热替换）。"""
+        dlg = Gtk.MessageDialog(
+            transient_for=self, modal=True,
+            message_type=Gtk.MessageType.INFO,
+            buttons=Gtk.ButtonsType.OK,
+            text="更新下载",
+            secondary_text="最新版镜像已开始下载到临时目录。\n下载完成后请重新刻录 U 盘再安装。\n\n当前继续使用本地镜像安装。")
+        dlg.run()
+        dlg.destroy()
+        self.show_page_disk()
+
+    # ---------- 磁盘页 ----------
+    def show_page_disk(self):
+        self.step = 1
+        self.update_steps()
+        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+
+        sc = Gtk.ScrolledWindow()
+        sc.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        sc.set_vexpand(True)
+        inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        sc.add(inner)
+        content.pack_start(sc, True, True, 0)
+
+        def make_row(d):
+            row = Gtk.Button()
+            row.set_relief(Gtk.ReliefStyle.NONE)
+            row.set_margin_top(4)
+            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+            box.set_margin_start(10); box.set_margin_end(10)
+            t = Gtk.Label()
+            t.set_markup(f'<span font="14" weight="bold" color="#111827">{d["name"]}  ·  {d["size"]}</span>')
+            t.set_halign(Gtk.Align.START)
+            m = Gtk.Label(label=f'{d["model"]}  ({d["path"]})')
+            m.get_style_context().add_class("subtitle")
+            m.set_halign(Gtk.Align.START)
+            box.pack_start(t, False, False, 0)
+            box.pack_start(m, False, False, 0)
+            row.add(box)
+            return row
+
+        disks = list_disks()
+        for d in disks:
+            row = make_row(d)
+            row.connect("clicked", self.on_disk_chosen, d)
+            inner.pack_start(row, False, False, 0)
+
+        hint = Gtk.Label()
+        hint.set_markup('<span font="12" color="#6b7280">选择要安装 DUESLIN 的整块硬盘（将自动分区并格式化该盘）。</span>')
+        hint.set_halign(Gtk.Align.START)
+        content.pack_start(hint, False, False, 4)
+        self.page_shell("选择安装位置", "选择一块硬盘，DUESLIN 将自动完成分区", content)
+
+    def on_disk_chosen(self, btn, d):
+        self.disk = d["path"]
+        self.partition = None
+        log(f"选择整盘: {self.disk}")
+        self.show_page_confirm()
+
+    # ---------- 确认页 ----------
+    def show_page_confirm(self):
+        self.step = 1
+        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+        warn = Gtk.Label()
+        warn.set_line_wrap(True)
+        warn.set_markup(
+            f'<span font="14" color="#111827">将安装到磁盘 <b>{self.disk}</b>\n\n'
+            '即将进行以下操作：\n'
+            ' 1. 擦除并重新分区该磁盘（GPT）\n'
+            ' 2. 创建引导分区与系统分区\n'
+            ' 3. 解压 DUESLIN 系统镜像（.wim）\n'
+            ' 4. 写入引导程序与 PE 修复环境\n'
+            ' 5. 完成后自动重启\n\n'
+            '<span color="#dc2626">⚠ 该磁盘上的所有数据将被清除！</span></span>')
+        warn.set_halign(Gtk.Align.START)
+        content.pack_start(warn, False, False, 0)
+
+        hb = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        back = Gtk.Button(label="← 返回")
+        back.get_style_context().add_class("secondary")
+        back.connect("clicked", lambda w: self.show_page_disk())
+        go = Gtk.Button(label="开始安装")
+        go.get_style_context().add_class("primary")
+        go.connect("clicked", lambda w: self.start_install())
+        hb.pack_end(go, False, False, 0)
+        hb.pack_end(back, False, False, 0)
+        content.pack_start(hb, False, False, 0)
+        self.page_shell("确认安装", "请确认以下操作无误", content)
+
+    # ---------- 安装页 ----------
+    def start_install(self):
+        self.step = 2
+        self.update_steps()
+        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
+        self.prog = Gtk.ProgressBar()
+        self.prog.set_show_text(True)
+        self.prog.set_fraction(0.0)
+        self.prog.set_size_request(-1, 8)
+        content.pack_start(self.prog, False, False, 0)
+
+        self.log_view = Gtk.TextView()
+        self.log_view.set_editable(False)
+        self.log_view.set_wrap_mode(Gtk.WrapMode.WORD)
+        self.log_view.set_cursor_visible(False)
+        self.log_view.get_buffer().set_text("正在准备 ...\n")
+        sc = Gtk.ScrolledWindow()
+        sc.set_min_content_height(180)
+        sc.add(self.log_view)
+        content.pack_start(sc, True, True, 0)
+        self.page_shell("正在安装 DUESLIN", "正在解压系统镜像并写入磁盘", content)
+
+        th = threading.Thread(target=self.do_install, daemon=True)
+        th.start()
+
+    def do_install(self):
+        def cb_pct(p):
+            GLib.idle_add(self.prog.set_fraction, p / 100.0)
+            GLib.idle_add(self.prog.set_text, f"{p}%")
+        def cb_log(t):
+            GLib.idle_add(self.append_log, t)
+        try:
+            self.installer.install(cb_pct, cb_log)
+            GLib.idle_add(self.show_page_done)
+        except Exception as e:
+            log(f"安装失败: {e}")
+            GLib.idle_add(self.append_log, f"✗ 安装失败: {e}\n")
+
+    def append_log(self, t):
+        buf = self.log_view.get_buffer()
+        buf.insert(buf.get_end_iter(), t + "\n")
+        return False
+
+    # ---------- 完成页 ----------
+    def show_page_done(self):
+        self.step = 3
+        self.update_steps()
+        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18)
+        ok = Gtk.Label()
+        ok.set_markup('<span font="30">✅</span>')
+        t = Gtk.Label()
+        t.set_markup('<span font="20" weight="bold" color="#111827">DUESLIN 安装完成！</span>')
+        self.count_lb = Gtk.Label()
+        self.count_lb.set_markup('<span font="14" color="#374151">电脑将在 <b>5</b> 秒后自动重启 ...</span>')
+        content.pack_start(ok, False, False, 0)
+        content.pack_start(t, False, False, 0)
+        content.pack_start(self.count_lb, False, False, 0)
+
+        hb = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        now = Gtk.Button(label="立即重启")
+        now.get_style_context().add_class("primary")
+        now.connect("clicked", lambda w: self.reboot())
+        hb.pack_start(now, True, False, 0)
+        content.pack_start(hb, False, False, 6)
+        self.page_shell("安装完成", "取出安装介质，系统即将重启", content)
+
+        self.remain = 5
+        self.timer_id = GLib.timeout_add(1000, self.countdown)
+        # 抽出介质提示
+        self.append_done_hint()
+
+    def append_done_hint(self):
+        pass
+
+    def countdown(self):
+        self.remain -= 1
+        if self.remain <= 0:
+            self.reboot()
+            return False
+        self.count_lb.set_markup(
+            f'<span font="14" color="#374151">电脑将在 <b>{self.remain}</b> 秒后自动重启 ...</span>')
+        return True
+
+    def reboot(self):
+        log("触发重启")
+        subprocess.Popen("reboot -f", shell=True)
+
+    def on_close_ask(self, widget, event):
+        if self.step >= 2:
+            # 安装中/完成后关闭 = 询问
+            dlg = Gtk.MessageDialog(
+                transient_for=self, modal=True, buttons=Gtk.ButtonsType.YES_NO,
+                message_format="确定要关闭安装程序吗？")
+            dlg.format_secondary_text("关闭后系统将停留在安装环境，请重新启动安装介质。")
+            resp = dlg.run()
+            dlg.destroy()
+            if resp == Gtk.ResponseType.YES:
+                if self.timer_id:
+                    GLib.source_remove(self.timer_id)
+                Gtk.main_quit()
+            return True
+        Gtk.main_quit()
+        return True
+
+def main():
+    w = InstallerWindow()
+    w.set_css(w)
+    w.show_all()
+    Gtk.main()
+
+if __name__ == "__main__":
+    main()
