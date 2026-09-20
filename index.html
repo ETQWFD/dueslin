@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>DUESLIN 1.0 — 简洁 · 快速 · 兼容旧设备</title>
-<link rel="icon" type="image/svg+xml" href="assets/logo.svg"><rect width='100' height='100' rx='12' fill='%231a73e8'/><text x='50' y='68' font-size='52' font-weight='bold' text-anchor='middle' fill='black'>D</text></svg>">
+<link rel="icon" type="image/svg+xml" href="assets/logo.svg">
 <style>
   :root{
     --brand:#2563eb; --brand-2:#06b6d4; --ink:#111827; --ink-2:#374151;
@@ -168,7 +168,7 @@
       <a href="#commands">命令</a>
       <a href="#specs">规格</a>
       <a href="#video">演示</a>
-      <a class="btn btn-sm" href="#download" id="navDownload">下载 ISO</a>
+      <a class="btn btn-sm" href="download.html">下载 ISO</a>
     </div>
   </div>
 </header>
@@ -180,7 +180,7 @@
     <h1>把旧电脑变成<br><span>秒级启动</span>的全新系统</h1>
     <p class="sub">DUESLIN 1.0 —— 仅需 400MB+ 磁盘与 1GB 内存，Windows 式安装体验，内置浏览器、WiFi / 蓝牙 / 音频驱动，兼容大多数旧机器。</p>
     <div class="ctas">
-      <a class="btn" href="#download" id="heroDownload">下载 DUESLIN 1.0</a>
+      <a class="btn" href="download.html">下载 DUESLIN 1.0</a>
       <a class="btn ghost" href="#video">观看演示视频</a>
     </div>
     <div class="stats">
@@ -345,7 +345,7 @@
     <h2 style="color:#fff;font-size:30px;font-weight:800;letter-spacing:-.3px">现在就开始，让旧电脑焕然一新</h2>
     <p style="color:#94a3b8;margin:14px auto 30px;max-width:520px">DUESLIN 1.0 已开放下载。镜像小于 1GB，支持 U 盘启动安装，安装后即可正常使用。</p>
     <div class="ctas">
-      <a class="btn" id="dlGithub" href="#" target="_blank" rel="noopener">前往 GitHub 下载</a>
+      <a class="btn" href="download.html">下载 DUESLIN</a>
       <a class="btn ghost" href="#install">查看安装教程</a>
     </div>
   </div>
@@ -354,30 +354,13 @@
 <footer>
   <div class="wrap foot">
     <span>DUESLIN 1.0 · 基于 Linux 内核构建 · 遵循开源协议</span>
-    <span><a href="#" id="footGithub" style="color:var(--mut);text-decoration:none">GitHub 仓库</a> · <span id="year"></span></span>
+    <span><a href="https://github.com/ETQWFD/dueslin" style="color:var(--mut);text-decoration:none">GitHub 仓库</a> · <span id="year"></span></span>
   </div>
 </footer>
 
 <script>
   var YEAR_EL = document.getElementById('year');
   if (YEAR_EL) YEAR_EL.textContent = new Date().getFullYear() + ' DUESLIN';
-
-  // 下载按钮统一跳转 GitHub Release（发布后填充链接）
-  var REL = 'download.html/download/v1.0.0/DUESLIN-1.0.iso';
-  var DLS = ['navDownload','heroDownload','dlGithub','footGithub'];
-  DLS.forEach(function(id){
-    var el = document.getElementById(id);
-    if (!el) return;
-    el.addEventListener('click', function(e){
-      if (REL) { el.href = REL; return; }
-      e.preventDefault();
-      var t = document.createElement('div');
-      t.style.cssText = 'position:fixed;left:50%;bottom:32px;transform:translateX(-50%);background:#111827;color:#fff;padding:12px 22px;border-radius:10px;font-size:14px;z-index:99;box-shadow:0 8px 24px rgba(0,0,0,.25)';
-      t.textContent = '下载链接即将就绪，请稍后访问本页刷新。';
-      document.body.appendChild(t);
-      setTimeout(function(){ t.remove(); }, 3200);
-    });
-  });
 </script>
 </body>
 </html>
