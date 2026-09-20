@@ -391,15 +391,20 @@ class InstallerWindow(Gtk.Window):
         info.set_halign(Gtk.Align.START)
         card.pack_start(info, False, False, 0)
 
-        # 磁盘容量检测提示
-        cap = Gtk.Label()
-        try:
-            total_gb = sum(int(d["size"].replace("G","").replace("T","000G").rstrip("G")) for d in list_disks())
-            cap.set_markup(f'<span font="12" color="#6b7280">检测到 {len(list_disks())} 块硬盘</span>')
-        except Exception:
-            cap.set_markup('<span font="12" color="#6b7280">正在检测硬盘 ...</span>')
-        cap.set_halign(Gtk.Align.START)
-        card.pack_start(cap, False, False, 6)
+        # 用户协议
+        eula = Gtk.Label()
+        eula.set_line_wrap(True)
+        eula.set_markup(
+            '<span font="11" color="#6b7280">用户协议：DUESLIN 以 MIT 协议开源，'
+            '按"现状"提供，不附带任何担保。使用本系统即表示您同意开源协议条款。'
+            '安装会擦除目标磁盘上的所有数据，请提前备份。</span>')
+        eula.set_halign(Gtk.Align.START)
+        card.pack_start(eula, False, False, 6)
+
+        agree = Gtk.CheckButton(label="我已阅读并同意用户协议")
+        self.eula_check = agree
+        card.pack_start(agree, False, False, 6)
+
         content.pack_start(card, False, False, 0)
 
         # 在线更新检查（后台线程，不阻塞 UI）
@@ -412,7 +417,16 @@ class InstallerWindow(Gtk.Window):
 
     # ---------- 在线更新检查 ----------
     def on_continue(self, widget):
-        """点击继续：先联网检查 GitHub Release 是否有更新，再进入磁盘选择。"""
+        """点击继续：先检查用户协议，再联网检查更新，最后进入磁盘选择。"""
+        if not self.eula_check.get_active():
+            dlg = Gtk.MessageDialog(
+                transient_for=self, modal=True,
+                message_type=Gtk.MessageType.WARNING,
+                buttons=Gtk.ButtonsType.OK,
+                text="请先同意用户协议",
+                secondary_text="您必须勾选「我已阅读并同意用户协议」才能继续安装。")
+            dlg.run(); dlg.destroy()
+            return
         latest = None
         try:
             import urllib.request, json
