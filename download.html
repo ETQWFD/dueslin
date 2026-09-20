@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>下载 DUESLIN</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='12' fill='%231a73e8'/><text x='50' y='68' font-size='52' font-weight='bold' text-anchor='middle' fill='black' font-family='Arial'>D</text></svg>">
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family:'Segoe UI',system-ui,sans-serif; background:#f0f4f9; color:#1a1a1a; }
+nav { background:#1a73e8; padding:16px 40px; display:flex; align-items:center; gap:12px; }
+nav .logo { width:36px; height:36px; background:#1a73e8; border:2px solid #000; border-radius:8px; display:flex; align-items:center; justify-content:center; font-weight:bold; color:#000; font-size:20px; }
+nav h1 { color:white; font-size:20px; }
+nav a { color:white; text-decoration:none; margin-left:auto; opacity:.8; }
+.container { max-width:1000px; margin:40px auto; padding:0 20px; }
+h2 { font-size:28px; margin-bottom:8px; }
+.subtitle { color:#666; margin-bottom:32px; }
+.grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:20px; }
+.card { background:white; border-radius:12px; padding:24px; box-shadow:0 2px 8px rgba(0,0,0,.08); }
+.card h3 { font-size:18px; margin-bottom:4px; }
+.card .size { color:#888; font-size:13px; margin-bottom:16px; }
+.arch { display:flex; gap:8px; margin-bottom:12px; }
+.arch a { flex:1; text-align:center; padding:10px; background:#1a73e8; color:white; text-decoration:none; border-radius:6px; font-size:13px; }
+.arch a.alt { background:#5b9bd5; }
+.burner { margin-top:32px; background:white; border-radius:12px; padding:24px; box-shadow:0 2px 8px rgba(0,0,0,.08); }
+.burner .arch a { background:#34a853; }
+.burner .arch a.alt { background:#7ecb8f; }
+.note { margin-top:24px; padding:16px; background:#e8f0fe; border-radius:8px; font-size:13px; color:#333; }
+footer { text-align:center; padding:32px; color:#999; font-size:13px; }
+</style>
+</head>
+<body>
+<nav>
+  <div class="logo">D</div>
+  <h1>DUESLIN</h1>
+  <a href="index.html">← 返回首页</a>
+</nav>
+<div class="container">
+  <h2>下载 DUESLIN</h2>
+  <p class="subtitle">选择适合你的版本和架构</p>
+  <div class="grid">
+    <div class="card">
+      <h3>桌面版</h3>
+      <p class="size">978 MB · 图形安装器 + 桌面环境</p>
+      <div class="arch">
+        <a href="https://github.com/ETQWFD/dueslin/releases/download/v1.0.0/DUESLIN-1.0.iso" download>x86-64</a>
+        <a class="alt" href="#" onclick="alert('ARM64 版即将推出');return false;">ARM64</a>
+      </div>
+    </div>
+    <div class="card">
+      <h3>服务器版</h3>
+      <p class="size">300 MB · 纯终端，开发/服务器</p>
+      <div class="arch">
+        <a href="https://github.com/ETQWFD/dueslin/releases/download/v1.0.0/DUESLIN-Server-1.0.iso" download>x86-64</a>
+        <a class="alt" href="#" onclick="alert('ARM64 版即将推出');return false;">ARM64</a>
+      </div>
+    </div>
+    <div class="card">
+      <h3>精简版</h3>
+      <p class="size">25 MB · busybox shell，测试用</p>
+      <div class="arch">
+        <a href="https://github.com/ETQWFD/dueslin/releases/download/v1.0.0/DUESLIN-Mini-1.0.iso" download>x86-64</a>
+        <a class="alt" href="#" onclick="alert('ARM64 版即将推出');return false;">ARM64</a>
+      </div>
+    </div>
+  </div>
+  <div class="burner">
+    <h3>刻录工具</h3>
+    <p class="size">下载并刻录镜像到 U 盘</p>
+    <div class="arch">
+      <a href="https://github.com/ETQWFD/dueslin/releases/download/v1.0.0/DueslinBurner" download>Linux 版</a>
+      <a class="alt" href="#" onclick="alert('Windows 版请在 Windows 上用 auto-py-to-exe 打包 dueslin-burner.py');return false;">Windows 版</a>
+    </div>
+  </div>
+  <div class="note">
+    提示：x86-64 适用于大多数 64 位电脑。ARM64 版正在构建中。刻录 U 盘建议使用 Rufus 或 BalenaEtcher。
+  </div>
+</div>
+<footer>DUESLIN OS · 开源 MIT 协议 · github.com/ETQWFD/dueslin</footer>
+</body>
+</html>
