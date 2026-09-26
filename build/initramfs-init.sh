@@ -28,18 +28,66 @@ while [ $i -le 20 ]; do
 done
 printf '\033[0m'
 
-# 从 cmdline 读取模式
+# 从 cmdline 读取模式 与 root 设备
 MODE="install"
+ROOTDEV=""
 for x in $(cat /proc/cmdline); do
     case "$x" in
         dueslin_mode=*) MODE="${x#dueslin_mode=}" ;;
+        root=*) ROOTDEV="${x#root=}" ;;
     esac
 done
+
+# ===== 已安装系统引导: root 直接挂载 (不依赖 Alpine mkinitfs/nlplug) =====
+if [ -n "$ROOTDEV" ] && [ "$ROOTDEV" != "/dev/ram0" ]; then
+    printf '\033[2J\033[H\033[44m\033[1;37m  DUESLIN 1.0 - Booting installed system\033[0m\n'
+    echo "[DUESLIN] root=$ROOTDEV"
+    # 加载磁盘/文件系统驱动（阶段调试）
+    for m in sd_mod sr_mod scsi_mod ahci libahci ata_piix ata_generic \
+             usb-storage uas xhci-pci xhci-hcd ehci-pci nvme \
+             virtio virtio_ring virtio_pci virtio_blk virtio_scsi virtio_net \
+             vmw_pvscsi vmw_vmci vmw_vsock_vmci_transport \
+             ext4 vfat nls_cp437 nls_iso8859-1 mbcache jbd2 crc16 crc32c \
+             libcrc32c loop squashfs overlay; do
+        [ -d "/lib/modules/$(uname -r)" ] && { echo "[DUESLIN] +mod $m"; /sbin/modprobe "$m" 2>/dev/null; }
+    done
+    echo "[DUESLIN] modprobe done"
+    sleep 2
+    /bin/mkdir -p /sysroot
+    /bin/mount -t devtmpfs devtmpfs /dev 2>/dev/null
+    /bin/mount -t proc proc /proc 2>/dev/null
+    /bin/mount -t sysfs sysfs /sys 2>/dev/null
+    echo "[DUESLIN] dev/proc/sys mounted"
+    sleep 2
+    echo "[DUESLIN] mounting $ROOTDEV -> /sysroot"
+    if ! /bin/mount "$ROOTDEV" /sysroot 2>/dev/null; then
+        echo "[DUESLIN] 无法挂载根设备 $ROOTDEV (rc=$?)"
+        exec /bin/sh
+    fi
+    echo "[DUESLIN] root mounted OK"
+    /bin/mount -t devtmpfs devtmpfs /sysroot/dev 2>/dev/null
+    /bin/mount -t proc proc /sysroot/proc 2>/dev/null
+    /bin/mount -t sysfs sysfs /sysroot/sys 2>/dev/null
+    echo "[DUESLIN] switch_root 前检查:"
+    chmod 755 /sysroot 2>/dev/null
+    chmod +x /sysroot/sbin/init /sysroot/bin/busybox 2>/dev/null
+    echo "[DUESLIN] switching root (chroot + 静态 init)..."
+    # 用 initramfs 的静态 busybox 覆盖 /sbin/init（规避动态 ELF exec 的 EACCES 问题）
+    /bin/cp /bin/busybox /sysroot/dueslin-bb 2>/dev/null
+    /bin/chmod 755 /sysroot/dueslin-bb 2>/dev/null
+    /bin/rm -f /sysroot/sbin/init
+    /bin/ln -sf /dueslin-bb /sysroot/sbin/init
+    exec /bin/chroot /sysroot /sbin/init
+    echo "[DUESLIN] !! chroot init 失败"
+fi
 
 # 加载内核模块
 for m in loop squashfs overlay cdrom iso9660 sd_mod sr_mod ahci libahci \
          ata_piix ata_generic usb-storage uas xhci-pci xhci-hcd ehci-pci \
-         ehci-hcd ohci-pci ohci-hcd nvme ext4 vfat nls_cp437 nls_iso8859-1 \
+         ehci-hcd ohci-pci ohci-hcd nvme \
+         virtio virtio_ring virtio_pci virtio_blk virtio_scsi virtio_net \
+         vmw_pvscsi vmw_vmci vmw_vsock_vmci_transport \
+         ext4 vfat nls_cp437 nls_iso8859-1 \
          mbcache jbd2 crc16 crc32c libcrc32c \
          drm drm_kms_helper ttm sysfb simplefb fbdev fb_sys_fops \
          vmwgfx cirrus bochs drm_memory; do

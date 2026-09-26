@@ -13,13 +13,26 @@ mkdir -p "$OUT"
 echo "[DUESLIN] 正在以 WIM(LZX) 格式压缩系统 ..."
 echo "         源: $ROOT"
 
+CFG=$(mktemp)
+cat > "$CFG" <<'EOCFG'
+[ExclusionList]
+/proc/*
+/sys/*
+/dev/*
+/tmp/*
+/run/*
+/mnt/*
+/media/*
+/var/cache/*
+/var/log/*
+/var/tmp/*
+/root/.cache/*
+/boot/grub/*
+/dueslin-src/*
+EOCFG
 sudo wimlib-imagex capture "$ROOT" "$OUT/DUESLIN.wim" \
-    --compress=LZX \
-    --exclude="/proc/*" --exclude="/sys/*" --exclude="/dev/*" \
-    --exclude="/tmp/*" --exclude="/run/*" --exclude="/mnt/*" --exclude="/media/*" \
-    --exclude="/var/cache/*" --exclude="/var/log/*" --exclude="/var/tmp/*" \
-    --exclude="/root/.cache/*" --exclude="/boot/grub/*" \
-    --exclude="/dueslin-src/*" \
+    --compress=LZX --config="$CFG" \
     --description="DUESLIN 1.0 系统镜像" --name="DUESLIN"
+rm -f "$CFG"
 
 echo "完成: $OUT/DUESLIN.wim ($(du -h "$OUT/DUESLIN.wim" | cut -f1))"

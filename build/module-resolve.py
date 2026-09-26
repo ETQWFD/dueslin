@@ -17,7 +17,9 @@ TARGET = f"{STAGE}/lib/modules/{KVER}"
 NEED = ["loop", "squashfs", "overlay", "cdrom", "isofs", "sd_mod", "sr_mod",
         "ahci", "libahci", "ata_piix", "ata_generic", "usb-storage", "uas",
         "xhci-pci", "xhci-hcd", "ehci-pci", "ehci-hcd", "ohci-pci", "ohci-hcd",
-        "nvme", "ext4", "vfat", "nls_cp437", "nls_iso8859-1", "fuse",
+        "nvme", "virtio", "virtio_ring", "virtio_pci", "virtio_blk",
+        "virtio_scsi", "virtio_net", "vmw_pvscsi", "vmw_vmci",
+        "vmw_vsock_vmci_transport", "ext4", "vfat", "nls_cp437", "nls_iso8859-1", "fuse",
         "drm", "drm_kms_helper", "ttm", "sysfb", "simplefb", "fbdev",
         "fb_sys_fops", "vmwgfx", "cirrus", "bochs", "drm_memory"]
 

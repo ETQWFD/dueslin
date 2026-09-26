@@ -11,7 +11,8 @@ VER="$(ls "$LIVE/lib/modules" | head -1)"
 
 echo "[1/3] 使用内核版本: $VER"
 STAGE=$(mktemp -d)
-mkdir -p "$STAGE/bin" "$STAGE/lib/modules/$VER" "$STAGE/etc" "$STAGE/root" "$STAGE/sbin"
+mkdir -p "$STAGE/bin" "$STAGE/lib/modules/$VER" "$STAGE/etc" "$STAGE/root" "$STAGE/sbin" \
+    "$STAGE/proc" "$STAGE/sys" "$STAGE/dev"
 
 # 1. busybox（必须用静态版 busybox.static，否则 /init 因缺 musl 加载器而无法启动）
 STATIC_BB="$LIVE/bin/busybox.static"
@@ -22,7 +23,7 @@ chmod +x "$STAGE/init" "$STAGE/bin/busybox"
 # /bin 与 /sbin 都建符号链接，保证 init 里 /sbin/modprobe 等可找到
 for d in bin sbin; do
     mkdir -p "$STAGE/$d"
-    for a in sh mount umount modprobe switch_root mkdir ls cp uname cat exec mktemp echo sleep mv insmod rmmod lsmod poweroff reboot; do
+    for a in sh mount umount modprobe switch_root chroot mkdir ls cp uname cat exec mktemp echo sleep mv rm ln insmod rmmod lsmod poweroff reboot; do
         ln -sf ../bin/busybox "$STAGE/$d/$a" 2>/dev/null || true
     done
 done
@@ -34,7 +35,15 @@ echo "    initramfs 模块大小: $(du -sh "$STAGE/lib/modules" | cut -f1)"
 
 # 3. 打包 initramfs（cpio + gzip —— 兼容所有内核，避免 zstd 不支持导致 panic）
 echo "[3/3] 打包 initramfs ..."
-(cd "$STAGE" && find . -print0 | cpio --null -o -H newc 2>/dev/null | gzip -9 > /tmp/dueslin-initramfs)
+BB_CPIO="$LIVE/bin/busybox.static"
+[ -f "$BB_CPIO" ] || BB_CPIO="busybox"
+(cd "$STAGE" && find . | "$BB_CPIO" cpio -o -H newc 2>/dev/null | gzip -9 > /tmp/dueslin-initramfs)
+SIZE=$(stat -c %s /tmp/dueslin-initramfs)
+echo "    initramfs 大小: $SIZE 字节"
+if [ "$SIZE" -lt 1000000 ]; then
+    echo "ERROR: initramfs 过小，打包失败"
+    exit 1
+fi
 sudo install -m644 /tmp/dueslin-initramfs "$LIVE/boot/dueslin-initramfs"
 rm -f /tmp/dueslin-initramfs
 echo "完成: $LIVE/boot/dueslin-initramfs ($(sudo du -h "$LIVE/boot/dueslin-initramfs" | cut -f1))"

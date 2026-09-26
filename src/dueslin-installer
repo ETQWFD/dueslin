@@ -60,22 +60,37 @@ def run(cmd):
 
 # ---------------------------------------------------------------- 磁盘工具
 def list_disks():
-    """返回磁盘列表 [{name,size,model,type,path}]"""
+    """返回磁盘列表 [{name,size,model,type,path}] — 纯 Python 扫 /sys/block，零外部依赖"""
     out = []
     try:
-        r = subprocess.run(["lsblk", "-J", "-o", "NAME,SIZE,MODEL,TYPE,PATH,TRAN"],
-                           capture_output=True, text=True)
-        data = json.loads(r.stdout)
-        for d in data.get("blockdevices", []):
-            if d.get("type") != "disk":
+        for name in sorted(os.listdir("/sys/block")):
+            if name.startswith(("loop", "ram", "sr", "fd", "dm-", "zram")):
                 continue
-            out.append({
-                "name": d["name"], "size": d.get("size", "?"),
-                "model": d.get("model") or "硬盘",
-                "path": d.get("path") or f"/dev/{d['name']}",
-            })
+            path = f"/dev/{name}"
+            if not os.path.exists(path):
+                continue
+            size = "?"
+            try:
+                with open(f"/sys/block/{name}/size") as f:
+                    s512 = int(f.read().strip())
+                size = f"{s512 * 512 / (1024**3):.1f}G"
+            except Exception:
+                pass
+            model = ""
+            for m in ("device/model", "device/vendor"):
+                try:
+                    with open(f"/sys/block/{name}/{m}") as f:
+                        model += f.read().strip() + " "
+                except Exception:
+                    pass
+            model = model.strip() or "硬盘"
+            if name.startswith("vd"):
+                model = "VirtIO 磁盘 " + model
+            out.append({"name": name, "size": size, "model": model, "path": path})
     except Exception as e:
-        log(f"lsblk 失败: {e}")
+        log(f"磁盘扫描失败: {e}")
+    if not out:
+        log("警告: 未扫描到任何磁盘")
     return out
 
 def get_uuid(dev):
@@ -94,18 +109,41 @@ class Installer:
         self.log_text = ""
 
     def resolve_wim(self):
-        """定位安装介质上的 DUESLIN.wim"""
+        """定位安装介质上的 DUESLIN.wim（支持 SRC 标记 / 光驱 / 磁盘自动扫描）"""
+        import glob
         if os.path.exists(SRC_MARKER):
             dev = open(SRC_MARKER).read().strip()
             mnt = "/media/src"
             os.makedirs(mnt, exist_ok=True)
-            if not os.path.ismount(mnt):
-                run(f"mount {dev} {mnt} -o ro")
-            cands = [f"{mnt}/boot/dueslin/DUESLIN.wim"]
-            for c in cands:
-                if os.path.exists(c):
-                    self.wim_path = c
-                    return c
+            try:
+                if not os.path.ismount(mnt):
+                    run(f"mount {dev} {mnt} -o ro")
+                if os.path.exists(f"{mnt}/boot/dueslin/DUESLIN.wim"):
+                    self.wim_path = f"{mnt}/boot/dueslin/DUESLIN.wim"
+                    return self.wim_path
+            except Exception:
+                pass
+            try:
+                run(f"umount {mnt}")
+            except Exception:
+                pass
+        # 自动扫描光驱与磁盘，找到安装源
+        mnt = "/media/src"
+        os.makedirs(mnt, exist_ok=True)
+        for dev in glob.glob("/dev/sr[0-9]*") + glob.glob("/dev/sd[a-z]*"):
+            try:
+                if not os.path.ismount(mnt):
+                    run(f"mount {dev} {mnt} -o ro")
+                w = f"{mnt}/boot/dueslin/DUESLIN.wim"
+                if os.path.exists(w):
+                    self.wim_path = w
+                    return w
+            except Exception:
+                pass
+            try:
+                run(f"umount {mnt}")
+            except Exception:
+                pass
         for p in ["/boot/dueslin/DUESLIN.wim", "/mnt/src/boot/dueslin/DUESLIN.wim",
                   "/media/src/boot/dueslin/DUESLIN.wim"]:
             if os.path.exists(p):
@@ -169,21 +207,17 @@ class Installer:
         log_cb("（WIM 压缩包解压复制中，请耐心等待）")
 
         proc = subprocess.Popen(
-            ["wimlib-imagex", "apply", wim, "1", "/mnt/target", "--progress"],
+            ["wimlib-imagex", "apply", wim, "1", "/mnt/target", "--unix-data"],
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, bufsize=1)
-        last_pct = 0
-        for line in proc.stdout:
-            m = re.search(r"\[(\d+)%\]", line)
-            if m:
-                pct = int(m.group(1))
-                if pct > last_pct:
-                    last_pct = pct
-                    progress_cb(pct // 2)  # 0-50
         proc.wait()
         if proc.returncode != 0:
-            raise RuntimeError("WIM 解压失败，请检查磁盘空间")
+            err = (proc.stdout.read() if proc.stdout else "")[:300]
+            raise RuntimeError(f"WIM 解压失败: {err}")
         progress_cb(50)
+        # 确保系统虚拟目录存在（WIM 捕获时已清空，解压后重建）
+        for d in ("dev", "proc", "sys", "run", "tmp", "mnt", "media"):
+            os.makedirs(f"/mnt/target/{d}", exist_ok=True)
 
         # fstab
         log_cb("写入系统配置 ...")
@@ -208,26 +242,56 @@ class Installer:
                 shutil.copy(pe_src, "/mnt/target/boot/pe/pe.squashfs")
         progress_cb(70)
 
+        # 复制系统内核与 initramfs 到引导目录（/boot/dueslin/）
+        # 内核源优先取 ISO 挂载点（live squashfs 不含 boot，ISO 层含 /boot/dueslin/）
+        log_cb("复制系统内核 ...")
+        os.makedirs("/mnt/target/boot/dueslin", exist_ok=True)
+        # 内核源：与 WIM 同目录（/media/src/boot/dueslin/），最可靠
+        wim_dir = os.path.dirname(wim) if 'wim' in dir() and wim else "/media/src/boot/dueslin"
+        kern_src = os.path.join(wim_dir, "vmlinuz")
+        init_src = os.path.join(wim_dir, "initramfs")
+        log(f"  内核源检查: {kern_src} exists={os.path.exists(kern_src)}, {init_src} exists={os.path.exists(init_src)}")
+        if os.path.exists(kern_src) and os.path.exists(init_src):
+            shutil.copy(kern_src, "/mnt/target/boot/dueslin/vmlinuz")
+            shutil.copy(init_src, "/mnt/target/boot/dueslin/initramfs")
+            log(f"  ✓ 内核已复制: /mnt/target/boot/dueslin/vmlinuz + initramfs")
+        else:
+            # 兜底：扫描所有挂载点
+            for base in ("/media/src", "/mnt/src", "/run/media", "/media"):
+                k = os.path.join(base, "boot/dueslin/vmlinuz")
+                i = os.path.join(base, "boot/dueslin/initramfs")
+                if os.path.exists(k) and os.path.exists(i):
+                    shutil.copy(k, "/mnt/target/boot/dueslin/vmlinuz")
+                    shutil.copy(i, "/mnt/target/boot/dueslin/initramfs")
+                    log(f"  ✓ 兜底复制内核: {base}")
+                    break
+            else:
+                log("  ✗ 内核源缺失（检查 ISO 的 /boot/dueslin/vmlinuz）")
+
         # 安装 GRUB
         log_cb("安装引导程序 ...")
         grub_dir = "/mnt/target/boot/grub"
         os.makedirs(grub_dir, exist_ok=True)
         efi = os.path.isdir("/sys/firmware/efi")
+        def _grub(cmd):
+            rc = run(cmd)
+            if rc.returncode != 0:
+                raise RuntimeError(f"grub-install 失败: {(rc.stderr or '')[:200]}")
         if self.disk:
             if efi:
-                run(f"grub-install --target=x86_64-efi --efi-directory=/mnt/target/boot "
-                    f"--boot-directory=/mnt/target/boot --removable --recheck")
+                _grub(f"grub-install --target=x86_64-efi --efi-directory=/mnt/target/boot "
+                      f"--boot-directory=/mnt/target/boot --removable --recheck")
             else:
-                run(f"grub-install --target=i386-pc --boot-directory=/mnt/target/boot "
-                    f"--recheck {self.disk}")
+                _grub(f"grub-install --target=i386-pc --boot-directory=/mnt/target/boot "
+                      f"--recheck {self.disk}")
         else:
             # 自定义分区：找到其所属磁盘
             disk = re.sub(r"p?\d+$", "", self.partition)
-            run(f"grub-install --target=i386-pc --boot-directory=/mnt/target/boot --recheck {disk}")
+            _grub(f"grub-install --target=i386-pc --boot-directory=/mnt/target/boot --recheck {disk}")
         # grub.cfg
         tpl = "/etc/dueslin/grub.cfg.template"
         if os.path.exists(tpl):
-            cfg = open(tpl).read().replace("__ROOT__", f"UUID={root_uuid}")
+            cfg = open(tpl).read().replace("__ROOT__", self.target_root)
             cfg = cfg.replace("__PE_ENTRY__", "")
             with open(f"{grub_dir}/grub.cfg", "w") as f:
                 f.write(cfg)
@@ -288,7 +352,7 @@ class Installer:
 
 # ---------------------------------------------------------------- UI
 class InstallerWindow(Gtk.Window):
-    STEPS = ["欢迎", "磁盘", "安装", "完成"]
+    STEPS = ["欢迎", "许可", "磁盘", "安装", "完成"]
 
     def __init__(self):
         super().__init__(title=APP_TITLE)
@@ -353,15 +417,16 @@ class InstallerWindow(Gtk.Window):
         self.main.pack_start(t, False, False, 0)
         self.main.pack_start(st, False, False, 0)
         self.main.pack_start(content, True, True, 0)
+        self.main.show_all()
 
     def update_steps(self):
         for i, lb in enumerate(self.step_labels):
             if i < self.step:
-                lb.set_markup(f'<span class="step-done">   {i+1}  {self.STEPS[i]}  ✓</span>')
+                lb.set_markup(f'<span foreground="#22c55e" weight="bold">   {i+1}  {self.STEPS[i]}  ✓</span>')
             elif i == self.step:
-                lb.set_markup(f'<span class="step-cur">   {i+1}  {self.STEPS[i]}</span>')
+                lb.set_markup(f'<span foreground="#1a73e8" weight="bold">   {i+1}  {self.STEPS[i]}</span>')
             else:
-                lb.set_markup(f'<span class="step-pending">   {i+1}  {self.STEPS[i]}</span>')
+                lb.set_markup(f'<span foreground="#9ca3af">   {i+1}  {self.STEPS[i]}</span>')
 
     def set_css(self, widget):
         """递归应用 CSS"""
@@ -401,19 +466,125 @@ class InstallerWindow(Gtk.Window):
         eula.set_halign(Gtk.Align.START)
         card.pack_start(eula, False, False, 6)
 
-        agree = Gtk.CheckButton(label="我已阅读并同意用户协议")
+        agree = Gtk.CheckButton(label="我已阅读并同意用户协议"); agree.set_active(True)
         self.eula_check = agree
         card.pack_start(agree, False, False, 6)
 
         content.pack_start(card, False, False, 0)
 
-        # 在线更新检查（后台线程，不阻塞 UI）
-        btn = Gtk.Button(label="继续  →")
+        # 内存检查提示行
+        mem = Gtk.Label()
+        total = 0
+        try:
+            with open("/proc/meminfo") as f:
+                for l in f:
+                    if l.startswith("MemTotal"):
+                        total = int(l.split()[1]) // 1024  # MB
+                        break
+        except Exception:
+            pass
+        mem_ok = total >= 2048
+        mem.set_markup(f'<span font="12" color="{"#16a34a" if mem_ok else "#dc2626"}">系统内存: {total} MB {"（满足 2GB 要求）" if mem_ok else "（低于 2GB，安装可能较慢）"}</span>')
+        mem.set_halign(Gtk.Align.START)
+        card.pack_start(mem, False, False, 0)
+
+        btn = Gtk.Button(label="确认安装  →")
         btn.get_style_context().add_class("primary")
         btn.set_halign(Gtk.Align.END)
-        btn.connect("clicked", self.on_continue)
+        btn.connect("clicked", self.on_welcome_confirm)
         content.pack_start(btn, False, False, 0)
         self.page_shell("欢迎使用 DUESLIN", "简洁 · 快速 · 兼容旧设备", content)
+        self.connect("key-press-event", self.on_key)
+
+    # ---------- 确认安装：内存检查 ----------
+    def on_welcome_confirm(self, widget):
+        """确认安装 → 检查内存（≥2GB）→ 进入许可协议页。"""
+        total = 0
+        try:
+            with open("/proc/meminfo") as f:
+                for l in f:
+                    if l.startswith("MemTotal"):
+                        total = int(l.split()[1]) // 1024
+                        break
+        except Exception:
+            pass
+        if total < 2048:
+            dlg = Gtk.MessageDialog(
+                transient_for=self, modal=True,
+                message_type=Gtk.MessageType.WARNING,
+                buttons=Gtk.ButtonsType.YES_NO,
+                text=f"内存不足：当前 {total} MB",
+                secondary_text="DUESLIN 建议至少 2GB 内存以获得流畅安装体验。\n\n是否仍然继续安装？")
+            resp = dlg.run(); dlg.destroy()
+            if resp != Gtk.ResponseType.YES:
+                return
+        self.show_page_eula()
+
+    # ---------- 键盘支持（回车 = 当前页主按钮）----------
+    def on_key(self, widget, event):
+        if event.keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter):
+            if self.step == 0:
+                self.on_welcome_confirm(None)
+            elif self.step == 1:
+                self.on_eula_next(None)
+            elif self.step == 2:
+                d = getattr(self, "_chosen_disk", None)
+                if d:
+                    self.on_disk_chosen(None, d)
+            elif self.step == 3:
+                self.start_install()
+            return True
+        return False
+
+    # ---------- 许可协议页 ----------
+    def show_page_eula(self):
+        self.step = 1
+        self.update_steps()
+        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        card.set_margin_top(14); card.set_margin_bottom(14)
+        card.set_margin_start(20); card.set_margin_end(20)
+        eula = Gtk.Label()
+        eula.set_line_wrap(True)
+        eula.set_justify(Gtk.Justification.LEFT)
+        eula.set_text(
+            "DUESLIN 用户许可协议\n\n"
+            "DUESLIN 操作系统以 MIT 协议开源发布，按\"现状\"提供，不附带任何担保。\n\n"
+            "1. 您可以自由使用、复制、修改和分发本系统；\n"
+            "2. 本系统按\"现状\"提供，作者不对任何直接或间接损失负责；\n"
+            "3. 安装本系统将擦除目标磁盘上的所有数据，请提前备份；\n"
+            "4. 使用本系统即表示您同意上述条款。\n\n"
+            "DUESLIN 1.0 · 开发者 etc · 开源仓库 github.com/ETQWFD/dueslin")
+        eula.set_halign(Gtk.Align.START)
+        card.pack_start(eula, False, False, 0)
+        agree = Gtk.CheckButton(label="我已阅读并同意用户许可协议"); agree.set_active(True)
+        self.eula_check = agree
+        card.pack_start(agree, False, False, 4)
+        content.pack_start(card, False, False, 0)
+
+        hb = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        back = Gtk.Button(label="← 返回")
+        back.get_style_context().add_class("secondary")
+        back.connect("clicked", lambda w: self.show_page_welcome())
+        nxt = Gtk.Button(label="下一步  →")
+        nxt.get_style_context().add_class("primary")
+        nxt.connect("clicked", self.on_eula_next)
+        hb.pack_end(nxt, False, False, 0)
+        hb.pack_end(back, False, False, 0)
+        content.pack_start(hb, False, False, 0)
+        self.page_shell("许可协议", "请阅读并同意用户许可协议", content)
+
+    def on_eula_next(self, widget):
+        if not self.eula_check.get_active():
+            dlg = Gtk.MessageDialog(
+                transient_for=self, modal=True,
+                message_type=Gtk.MessageType.WARNING,
+                buttons=Gtk.ButtonsType.OK,
+                text="请先同意用户协议",
+                secondary_text="您必须勾选「我已阅读并同意用户许可协议」才能继续安装。")
+            dlg.run(); dlg.destroy()
+            return
+        self.show_page_disk()
 
     # ---------- 在线更新检查 ----------
     def on_continue(self, widget):
@@ -470,7 +641,7 @@ class InstallerWindow(Gtk.Window):
 
     # ---------- 磁盘页 ----------
     def show_page_disk(self):
-        self.step = 1
+        self.step = 2
         self.update_steps()
         content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
 
@@ -509,6 +680,8 @@ class InstallerWindow(Gtk.Window):
         hint.set_halign(Gtk.Align.START)
         content.pack_start(hint, False, False, 4)
         self.page_shell("选择安装位置", "选择一块硬盘，DUESLIN 将自动完成分区", content)
+        if len(disks) == 1:
+            GLib.timeout_add(500, lambda: (self.on_disk_chosen(None, disks[0]), False)[1])
 
     def on_disk_chosen(self, btn, d):
         self.disk = d["path"]
@@ -518,7 +691,7 @@ class InstallerWindow(Gtk.Window):
 
     # ---------- 确认页 ----------
     def show_page_confirm(self):
-        self.step = 1
+        self.step = 2
         content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
         warn = Gtk.Label()
         warn.set_line_wrap(True)
@@ -539,6 +712,7 @@ class InstallerWindow(Gtk.Window):
         back.get_style_context().add_class("secondary")
         back.connect("clicked", lambda w: self.show_page_disk())
         go = Gtk.Button(label="开始安装")
+        go.grab_focus()
         go.get_style_context().add_class("primary")
         go.connect("clicked", lambda w: self.start_install())
         hb.pack_end(go, False, False, 0)
@@ -548,7 +722,7 @@ class InstallerWindow(Gtk.Window):
 
     # ---------- 安装页 ----------
     def start_install(self):
-        self.step = 2
+        self.step = 3
         self.update_steps()
         content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
         self.prog = Gtk.ProgressBar()
@@ -578,6 +752,8 @@ class InstallerWindow(Gtk.Window):
         def cb_log(t):
             GLib.idle_add(self.append_log, t)
         try:
+            # 重新创建安装器实例并传入所选磁盘（修复 disk=None 导致分区逻辑走错分支）
+            self.installer = Installer(disk=self.disk, partition=self.partition)
             self.installer.install(cb_pct, cb_log)
             GLib.idle_add(self.show_page_done)
         except Exception as e:
@@ -591,7 +767,7 @@ class InstallerWindow(Gtk.Window):
 
     # ---------- 完成页 ----------
     def show_page_done(self):
-        self.step = 3
+        self.step = 4
         self.update_steps()
         content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18)
         ok = Gtk.Label()

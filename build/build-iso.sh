@@ -30,7 +30,30 @@ echo "[3/5] 复制 WIM 安装源 ..."
 cp "$WIM" "$STAGE/boot/dueslin/DUESLIN.wim"
 
 echo "[4/5] 生成 GRUB 菜单（英文标签，避免 GRUB 无中文字体导致乱码）..."
-cat > "$STAGE/boot/grub/grub.cfg" <<'EOF'
+if [ -f "$LIVE/boot/dueslin-boot.elf" ]; then
+    cp "$LIVE/boot/dueslin-boot.elf" "$STAGE/boot/dueslin/dueslin-boot.elf"
+    cat > "$STAGE/boot/grub/grub.cfg" <<'EOF'
+set timeout=3
+set default=1
+insmod all_video
+insmod multiboot
+menuentry "DUESLIN Boot Kernel (self-made)" {
+    multiboot /boot/dueslin/dueslin-boot.elf
+}
+menuentry "DUESLIN Installer (graphical)" {
+    linux /boot/dueslin/vmlinuz dueslin_mode=install rw
+    initrd /boot/dueslin/initramfs
+}
+menuentry "DUESLIN Installer (safe mode / VGA)" {
+    linux /boot/dueslin/vmlinuz dueslin_mode=install rw
+    initrd /boot/dueslin/initramfs
+}
+menuentry "Boot from local disk" {
+    exit
+}
+EOF
+else
+    cat > "$STAGE/boot/grub/grub.cfg" <<'EOF'
 set timeout=8
 set default=0
 insmod all_video
@@ -46,6 +69,7 @@ menuentry "Boot from local disk" {
     exit
 }
 EOF
+fi
 
 echo "[5/5] 生成 ISO ..."
 grub-mkrescue -o "$OUTISO" "$STAGE" --xorriso=xorriso 2>&1 | tail -3
