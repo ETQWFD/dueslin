@@ -44,6 +44,10 @@ menuentry "DUESLIN Installer (graphical)" {
     linux /boot/dueslin/vmlinuz dueslin_mode=install rw
     initrd /boot/dueslin/initramfs
 }
+menuentry "DUESLIN Installer (auto / unattended)" {
+    linux /boot/dueslin/vmlinuz dueslin_mode=install rw autoinstall
+    initrd /boot/dueslin/initramfs
+}
 menuentry "DUESLIN Installer (safe mode / VGA)" {
     linux /boot/dueslin/vmlinuz dueslin_mode=install rw
     initrd /boot/dueslin/initramfs
@@ -59,6 +63,10 @@ set default=0
 insmod all_video
 menuentry "DUESLIN Installer (graphical)" {
     linux /boot/dueslin/vmlinuz dueslin_mode=install rw
+    initrd /boot/dueslin/initramfs
+}
+menuentry "DUESLIN Installer (auto / unattended)" {
+    linux /boot/dueslin/vmlinuz dueslin_mode=install rw autoinstall
     initrd /boot/dueslin/initramfs
 }
 menuentry "DUESLIN Installer (safe mode / VGA)" {

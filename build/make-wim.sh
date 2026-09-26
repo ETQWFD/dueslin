@@ -30,9 +30,8 @@ cat > "$CFG" <<'EOCFG'
 /boot/grub/*
 /dueslin-src/*
 EOCFG
-sudo wimlib-imagex capture "$ROOT" "$OUT/DUESLIN.wim" \
-    --compress=LZX --config="$CFG" \
-    --description="DUESLIN 1.0 系统镜像" --name="DUESLIN"
+sudo wimlib-imagex capture "$ROOT" "$OUT/DUESLIN.wim" DUESLIN "DUESLIN 1.0 系统镜像" \
+    --compress=LZX --config="$CFG" --unix-data
 rm -f "$CFG"
 
 echo "完成: $OUT/DUESLIN.wim ($(du -h "$OUT/DUESLIN.wim" | cut -f1))"
