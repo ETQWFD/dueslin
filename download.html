@@ -41,41 +41,40 @@ footer { text-align:center; padding:32px; color:#999; font-size:13px; }
   <div class="grid">
     <div class="card">
       <h3>桌面版</h3>
-      <p class="size">978 MB · 图形安装器 + 桌面环境</p>
+      <p class="size">981 MB · 图形安装器 + 图形桌面（C 语言自研桌面壳）</p>
       <div class="arch">
         <a href="https://github.com/ETQWFD/dueslin/releases/download/v1.0.0/DUESLIN-1.0.iso" download>x86-64</a>
-        <a class="alt" href="#">ARM64</a>
+        <a class="alt" href="#" onclick="return false" title="ARM64 构建中">ARM64 构建中</a>
       </div>
     </div>
     <div class="card">
       <h3>服务器版</h3>
-      <p class="size">300 MB · 纯终端，开发/服务器</p>
+      <p class="size">720 MB · 纯终端，开发/服务器</p>
       <div class="arch">
         <a href="https://github.com/ETQWFD/dueslin/releases/download/v1.0.0/DUESLIN-Server-1.0.iso" download>x86-64</a>
-        <a class="alt" href="#">ARM64</a>
+        <a class="alt" href="#" onclick="return false" title="ARM64 构建中">ARM64 构建中</a>
       </div>
     </div>
     <div class="card">
       <h3>精简版</h3>
-      <p class="size">25 MB · busybox shell，测试用</p>
+      <p class="size">595 MB · 图形化安装 + 轻量桌面，测试用</p>
       <div class="arch">
         <a href="https://github.com/ETQWFD/dueslin/releases/download/v1.0.0/DUESLIN-Mini-1.0.iso" download>x86-64</a>
-        <a class="alt" href="#">ARM64</a>
+        <a class="alt" href="#" onclick="return false" title="ARM64 构建中">ARM64 构建中</a>
       </div>
     </div>
   </div>
   <div class="burner">
     <h3>刻录工具</h3>
-    <p class="size">下载并刻录镜像到 U 盘</p>
+    <p class="size">下载并刻录镜像到 U 盘 / 光盘</p>
     <div class="arch">
       <a href="https://github.com/ETQWFD/dueslin/releases/download/v1.0.0/DueslinBurner-linux" download>Linux 版</a>
       <a href="https://github.com/ETQWFD/dueslin/releases/download/v1.0.0/DueslinBurner.exe" download>Windows 版 (EXE)</a>
       <a href="https://github.com/ETQWFD/dueslin/releases/download/v1.0.0/DueslinBurner-py-src.zip" download>Python 源码包</a>
-      <a class="alt" href="http://www.com" style="background:#34a853">Windows 版</a>
     </div>
   </div>
   <div class="note">
-    提示：x86-64 适用于大多数 64 位电脑。ARM64 版正在构建中。刻录 U 盘建议使用 Rufus 或 BalenaEtcher。
+    提示：x86-64 适用于大多数 64 位电脑，三个镜像均已验证可真实图形化安装。ARM64 版正在构建中。刻录 U 盘也可使用 Rufus 或 BalenaEtcher。
   </div>
 </div>
 <footer>DUESLIN OS · 开源 MIT 协议 · github.com/ETQWFD/dueslin</footer>
@@ -86,9 +85,9 @@ footer { text-align:center; padding:32px; color:#999; font-size:13px; }
     <li><b>root 默认密码</b>：<code>1234</code>（登录后可用 <code>passwd</code> 修改）</li>
     <li><b>duiver 命令</b>：在终端输入 <code>duiver</code> 弹出版本信息窗口（版本 / 开发者 etc / 联系方式 / 官网），无图形环境时自动输出文本版</li>
     <li><b>图形安装</b>：语言 → 许可协议 → 磁盘选择/分区 → 复制文件 → 5 秒重启 → 用户配置 → 进入桌面</li>
-    <li><b>桌面版</b>：完整 Xfce 桌面 + Win11 风格海蓝主题 + 火狐浏览器 + 全新简化命令系统（<code>install python</code> 等）</li>
+    <li><b>桌面版</b>：C 语言自研轻量桌面（Win11 风格、海蓝背景 + D Logo、任务栏、开始菜单）+ 火狐浏览器 + 全新简化命令系统（<code>install python</code> 等）</li>
     <li><b>服务器版</b>：无桌面、纯终端，适合开发与部署，root 密码同样为 1234</li>
-    <li><b>精简版</b>：极简命令安装，镜像仅 26MB，安装后占用 < 10MB</li>
+    <li><b>精简版</b>：图形化安装 + 轻量桌面，适合测试与旧机器</li>
   </ul>
 </section>
 
