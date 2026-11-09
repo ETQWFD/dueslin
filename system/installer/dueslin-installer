@@ -58,14 +58,69 @@ def _find_wim():
     out = r.stdout.decode().strip() if r.stdout else ""
     return out if out else None
 
+
+def install_mouse(mnt, pairdir):
+    """把 gpm 装进目标系统并设为开机启动：安装好的系统也自带鼠标。"""
+    srcs = []
+    if pairdir:
+        srcs.append(os.path.join(os.path.dirname(pairdir), "gpm"))
+    srcs += ["/media/cdrom/dueslin/gpm", "/run/dueslin_iso/dueslin/gpm",
+             "/usr/sbin/gpm"]
+    gpm = None
+    for c in srcs:
+        if c and os.path.exists(c):
+            gpm = c
+            break
+    if not gpm:
+        log("未找到 gpm，跳过目标系统鼠标安装")
+        return
+    run("mkdir -p %s/usr/sbin %s/usr/bin" % (mnt, mnt))
+    run_log("cp -f %s %s/usr/sbin/gpm" % (gpm, mnt))
+    run("chmod 755 %s/usr/sbin/gpm" % mnt)
+    # 启动脚本：优先 imps2，失败退回 exps2
+    script = """#!/bin/sh
+# DUESLIN 鼠标服务：为控制台/安装环境提供指针（X 桌面下由 X 自身接管）
+[ -x /usr/sbin/gpm ] || exit 0
+pidof gpm >/dev/null 2>&1 && exit 0
+/usr/sbin/gpm -m /dev/input/mice -t imps2 -A >/dev/null 2>&1 || \
+/usr/sbin/gpm -m /dev/input/mice -t exps2 -A >/dev/null 2>&1
+"""
+    with open("/tmp/_dtm", "w") as f:
+        f.write(script)
+    run_log("cp -f /tmp/_dtm %s/usr/bin/dueslin-mouse" % mnt)
+    run("chmod 755 %s/usr/bin/dueslin-mouse" % mnt)
+    # inittab 追加一条 respawn（幂等：已存在则跳过）
+    itab = os.path.join(mnt, "etc", "inittab")
+    if os.path.exists(itab):
+        txt = open(itab).read()
+        if "dueslin-mouse" not in txt:
+            txt += "\n# DUESLIN: 系统自带鼠标服务\n::respawn:/usr/bin/dueslin-mouse\n"
+            open(itab, "w").write(txt)
+            log("目标系统 inittab 已加入鼠标服务")
+    log("目标系统鼠标已安装")
+
 def list_disks():
     """扫描所有真实块设备（SATA/SCSI/NVMe/virtio/IDE/USB/MMC/RAID），
     排除光驱(rom)、内存盘(ram)、设备映射(dm)、loop、zram 等不可安装设备。"""
     disks = []
-    skip = ("loop", "ram", "zram", "dm-", "md", "sr", "nbd", "fd")
+    skip = ("loop", "ram", "zram", "dm-", "md", "sr", "nbd", "fd", "wbt", "nullb")
+    # 安装介质自身的设备（避免把装机 U 盘/CD 当作安装目标）
+    selfdev = set()
+    try:
+        mnt = open("/proc/mounts").read()
+        for line in mnt.splitlines():
+            f = line.split()
+            if len(f) > 1 and f[1] in ("/media/cdrom", "/run/dueslin_iso", "/"):
+                base = os.path.basename(os.path.realpath(f[0]))
+                selfdev.add(base)
+                selfdev.add(os.path.basename(f[0]))
+    except Exception:
+        pass
     try:
         for name in sorted(os.listdir("/sys/block")):
             if name.startswith(skip):
+                continue
+            if name in selfdev:
                 continue
             blk = "/sys/block/%s" % name
             # 可移动介质(U盘/移动硬盘)允许安装
@@ -87,6 +142,12 @@ def list_disks():
                     continue
             except Exception:
                 pass
+            try:
+                with open("%s/queue/logical_block_size" % blk) as f:
+                    lbs = int(f.read().strip())
+                secs = secs * 512 // (lbs or 512) if lbs and lbs != 512 else secs
+            except Exception:
+                pass
             if os.path.exists(blk + "/ro") :
                 try:
                     if open(blk + "/ro").read().strip() == "1":
@@ -103,6 +164,27 @@ def list_disks():
             for d in sorted(glob.glob(pat)):
                 if d not in disks and os.path.exists(d):
                     disks.append(d)
+    # 兜底：/sys/block 读不到时用 /proc/partitions 枚举整盘（无子分区号）
+    if not disks:
+        try:
+            for line in open("/proc/partitions").read().splitlines()[2:]:
+                f = line.split()
+                if len(f) < 4:
+                    continue
+                name, blocks = f[3], int(f[2])
+                if name[-1].isdigit() and not name.startswith("nvme"):
+                    continue
+                if name[-1].isdigit() and name.startswith("nvme") and "p" in name:
+                    continue
+                if name.startswith(skip):
+                    continue
+                if blocks * 1024 < 2 * 1024 * 1024 * 1024:
+                    continue
+                dev = "/dev/%s" % name
+                if os.path.exists(dev):
+                    disks.append((name, dev, blocks * 1024))
+        except Exception:
+            pass
     return disks
 
 def disk_size(disk):
@@ -306,6 +388,7 @@ class TUI:
         run_log("mount %s %s" % (p2, mnt))
         run("mkdir -p %s/boot" % mnt)
         run_log("mount %s %s" % (p1, mnt + "/boot"))
+        install_mouse(mnt, pairdir)
         src = None
         if os.path.exists(SRC_MARKER):
             with open(SRC_MARKER) as f: src = f.read().strip()

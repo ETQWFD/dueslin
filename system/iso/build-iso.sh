@@ -93,6 +93,13 @@ fi
 # 展开 GRUB 默认启动项（VM 版传 DUESLIN_GRUB_DEFAULT=2 直进 auto 安装）
 sed -i 's/\${DUESLIN_GRUB_DEFAULT:-\?[01]}/'"${DUESLIN_GRUB_DEFAULT:-1}"'/g' "$STAGE/boot/grub/grub.cfg"
 
+# 鼠标服务二进制：安装器会把它装进目标系统（装好后也自带鼠标）
+if [ -f "$PWD/dueslin-build/live/usr/sbin/gpm" ]; then
+    mkdir -p "$STAGE/dueslin"
+    cp "$PWD/dueslin-build/live/usr/sbin/gpm" "$STAGE/dueslin/gpm"
+    echo "  gpm 已打包: dueslin/gpm ($(stat -c%s "$STAGE/dueslin/gpm") B)"
+fi
+
 # WCT 自研内核（UEFI 原生）：放进 ISO，可 UEFI 直接启动进桌面
 mkdir -p "$STAGE/wct"
 if [ -f "$PWD/wct/kernel/build/wctk.efi" ]; then
