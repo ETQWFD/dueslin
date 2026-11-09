@@ -52,6 +52,8 @@ static int gfx_done;
 #define GFX_DESKTOP 0
 #define WIN_FILES 0
 #define WIN_TERM 1
+#define WIN_SETTINGS 2
+#define WIN_SETTINGS 2
 #define WIN_MAX 4
 #define WIN_MAX_LINES 12
 #define WIN_COLS 68
@@ -80,9 +82,11 @@ static int drag_dx, drag_dy;
 
 static UINT32 gfx_rgb(UINT8 r, UINT8 g, UINT8 b)
 {
+    /* PixelFormat 0 = RedGreenBlueReserved(字节序 R,G,B → 值 B<<16|G<<8|R)
+       1 = BlueGreenRedReserved(字节序 B,G,R → 值 R<<16|G<<8|B) */
     UINT32 fmt = gfx->Mode->Info->PixelFormat;
-    if (fmt == 0) return ((UINT32)r << 16) | ((UINT32)g << 8) | b;
-    return ((UINT32)b << 16) | ((UINT32)g << 8) | r;
+    if (fmt == 0) return ((UINT32)b << 16) | ((UINT32)g << 8) | r;
+    return ((UINT32)r << 16) | ((UINT32)g << 8) | b;
 }
 
 static void gfx_pixel(int x, int y, UINT32 c)
@@ -275,6 +279,8 @@ static int win_open(int type)
         wins[i].y = 90 + n * 35;
         wins[i].w = (int)gfx_w - 160;
         wins[i].h = (int)gfx_h - 220;
+        if (type == WIN_SETTINGS) { wins[i].w = 560; wins[i].h = 430; }
+        if (type == WIN_SETTINGS) { wins[i].w = 560; wins[i].h = 430; }
         if (wins[i].w > 760) wins[i].w = 760;
         if (wins[i].h > 460) wins[i].h = 460;
         wins[i].z = ++z_top;
@@ -399,17 +405,41 @@ static void draw_term(GuiWin *w)
     gfx_fill(w->x + 80 + w->input_len * 8, yy + 14, 7, 2, gfx_text_c);
 }
 
+static const char *theme_names[5] = { "Blue", "Midnight", "Green", "Matrix", "Amber" };
+static void apply_theme(void);
+
+static void draw_settings(GuiWin *w)
+{
+    int x0 = w->x + 18, y0 = w->y + 44;
+    gfx_text(x0, y0 - 8, "Appearance", gfx_dim);
+    for (int i = 0; i < 5; ++i) {
+        int ry = y0 + 14 + i * 40;
+        int sel = (theme_index == i);
+        gfx_fill(x0 - 6, ry - 6, w->w - 36, 32, sel ? gfx_panel : gfx_rgb(10, 12, 20));
+        gfx_border(x0 - 6, ry - 6, w->w - 36, 32, sel ? gfx_accent : gfx_dim);
+        gfx_text(x0, ry, theme_names[i], sel ? gfx_accent : gfx_text_c);
+        gfx_text(x0 + 130, ry, sel ? "current" : "click to apply", gfx_dim);
+    }
+    int ry = y0 + 14 + 5 * 40 + 10;
+    gfx_text(x0, ry, "Window manager", gfx_dim);
+    gfx_text(x0, ry + 22, "drag title bar to move   /   X to close   /   taskbar to focus", gfx_text_c);
+    gfx_text(x0, ry + 44, "kernel: WCT Kernel 0.1_ET   ui: wctdesk   input: usb hid / ps2", gfx_dim);
+    gfx_text(x0, ry + 66, "display: GOP framebuffer   shell: wctsh", gfx_dim);
+}
 static void draw_window(GuiWin *w)
 {
     UINT32 border = (win_from_index(focus_win) == w) ? gfx_accent : gfx_dim;
     gfx_fill(w->x, w->y, w->w, w->h, gfx_rgb(8, 8, 14));
     gfx_border(w->x, w->y, w->w, w->h, border);
     gfx_fill(w->x + 2, w->y + 2, w->w - 4, 28, gfx_top);
-    gfx_text(w->x + 10, w->y + 8, w->type == WIN_FILES ? "Files" : "Terminal", border);
+    gfx_text(w->x + 10, w->y + 8,
+             w->type == WIN_FILES ? "Files" :
+             (w->type == WIN_SETTINGS ? "Settings" : "Terminal"), border);
     gfx_fill(w->x + w->w - 34, w->y + 6, 24, 20, gfx_panel);
     gfx_border(w->x + w->w - 34, w->y + 6, 24, 20, border);
     gfx_text(w->x + w->w - 26, w->y + 9, "X", gfx_text_c);
     if (w->type == WIN_FILES) draw_files(w);
+    else if (w->type == WIN_SETTINGS) draw_settings(w);
     else draw_term(w);
 }
 
@@ -419,23 +449,26 @@ static void draw_desktop(void)
     gfx_fill(0, 0, (int)gfx_w, 38, gfx_top);
     gfx_text(14, 11, "WCT-OS Desktop", gfx_text_c);
     gfx_text((int)gfx_w - 220, 11, "aqtwWCT95  |  4.0.441", gfx_dim);
-    const char *names[4] = { "Files", "Terminal", "Theme", "Exit" };
-    for (int i = 0; i < 4; ++i) {
-        int x = 40 + i * 180, y = 75;
+    const char *names[5] = { "Files", "Terminal", "Settings", "Theme", "Exit" };
+    const char *subs[5]  = { "open", "open", "open", "cycle", "leave" };
+    for (int i = 0; i < 5; ++i) {
+        int x = 40 + i * 176, y = 75;
         gfx_fill(x, y, 160, 74, gfx_panel);
         gfx_border(x, y, 160, 74, gfx_accent);
         gfx_text(x + 14, y + 14, names[i], gfx_text_c);
-        gfx_text(x + 14, y + 42, i == 2 ? "cycle" : (i == 3 ? "leave" : "open"), gfx_dim);
+        gfx_text(x + 14, y + 42, subs[i], gfx_dim);
     }
     gfx_text(40, 180, "Drag window title bars. Click X to close a window.", gfx_dim);
-    gfx_text(40, 202, "Multiple windows can stay open at the same time.", gfx_dim);
+    gfx_text(40, 202, "Settings > Appearance switches the desktop theme.", gfx_dim);
     /* taskbar */
     gfx_fill(0, (int)gfx_h - 34, (int)gfx_w, 34, gfx_top);
     int bx = 8;
     for (int i = 0; i < WIN_MAX; ++i) {
         if (!wins[i].alive) continue;
         gfx_fill(bx, (int)gfx_h - 30, 150, 24, i == focus_win ? gfx_accent : gfx_panel);
-        gfx_text(bx + 8, (int)gfx_h - 26, wins[i].type == WIN_FILES ? "Files" : "Terminal", gfx_text_c);
+        gfx_text(bx + 8, (int)gfx_h - 26,
+                 wins[i].type == WIN_FILES ? "Files" :
+                 (wins[i].type == WIN_SETTINGS ? "Settings" : "Terminal"), gfx_text_c);
         bx += 160;
     }
 }
@@ -472,6 +505,22 @@ static void handle_click(void)
             dragging = wi;
             drag_dx = mouse_x - w->x;
             drag_dy = mouse_y - w->y;
+            return;
+        }
+        if (w->type == WIN_SETTINGS) {
+            int y0 = 44;
+            for (int i = 0; i < 5; ++i) {
+                int ry = y0 + 14 + i * 40;
+                if (ly >= ry - 8 && ly < ry + 28) { theme_index = i; apply_theme(); return; }
+            }
+            return;
+        }
+        if (w->type == WIN_SETTINGS) {
+            int y0 = 44;
+            for (int i = 0; i < 5; ++i) {
+                int ry = y0 + 14 + i * 40;
+                if (ly >= ry - 8 && ly < ry + 28) { theme_index = i; apply_theme(); return; }
+            }
             return;
         }
         if (w->type == WIN_FILES) {
@@ -524,29 +573,31 @@ static void handle_click(void)
         }
     }
     /* desktop icons */
-    for (int i = 0; i < 4; ++i) {
-        int x = 40 + i * 180, y = 75;
+    for (int i = 0; i < 5; ++i) {
+        int x = 40 + i * 176, y = 75;
         if (mouse_x >= x && mouse_x < x + 160 && mouse_y >= y && mouse_y < y + 74) {
             if (i == 0) win_open(WIN_FILES);
             else if (i == 1) win_open(WIN_TERM);
-            else if (i == 2) theme_index = (theme_index + 1) % 5;
+            else if (i == 2) win_open(WIN_SETTINGS);
+            else if (i == 3) theme_index = (theme_index + 1) % 5;
             else gfx_done = 1;
             return;
         }
     }
 }
 
+
 static void apply_theme(void)
 {
     switch (theme_index) {
-    case 0: gfx_bg=gfx_rgb(15,10,25); gfx_top=gfx_rgb(60,20,80); gfx_panel=gfx_rgb(30,25,45); gfx_accent=gfx_rgb(205,125,255); break;
-    case 1: gfx_bg=gfx_rgb(5,15,10); gfx_top=gfx_rgb(10,45,25); gfx_panel=gfx_rgb(15,32,22); gfx_accent=gfx_rgb(55,220,115); break;
-    case 2: gfx_bg=gfx_rgb(0,10,0); gfx_top=gfx_rgb(0,40,0); gfx_panel=gfx_rgb(0,25,0); gfx_accent=gfx_rgb(0,255,0); break;
-    case 3: gfx_bg=gfx_rgb(15,10,0); gfx_top=gfx_rgb(60,35,0); gfx_panel=gfx_rgb(35,25,5); gfx_accent=gfx_rgb(255,190,60); break;
-    default: gfx_bg=gfx_rgb(5,10,20); gfx_top=gfx_rgb(20,45,70); gfx_panel=gfx_rgb(15,28,45); gfx_accent=gfx_rgb(100,210,255); break;
+    case 0: gfx_bg=gfx_rgb(6,12,26);  gfx_top=gfx_rgb(18,44,86);  gfx_panel=gfx_rgb(16,30,52);  gfx_accent=gfx_rgb(84,170,255); break;
+    case 1: gfx_bg=gfx_rgb(10,10,16); gfx_top=gfx_rgb(30,32,48);  gfx_panel=gfx_rgb(22,24,36);  gfx_accent=gfx_rgb(140,160,220); break;
+    case 2: gfx_bg=gfx_rgb(5,16,12);   gfx_top=gfx_rgb(10,48,32);  gfx_panel=gfx_rgb(14,34,24);  gfx_accent=gfx_rgb(60,210,140); break;
+    case 3: gfx_bg=gfx_rgb(0,10,0);    gfx_top=gfx_rgb(0,40,0);    gfx_panel=gfx_rgb(0,26,0);    gfx_accent=gfx_rgb(0,255,90);  break;
+    default: gfx_bg=gfx_rgb(16,12,4);  gfx_top=gfx_rgb(62,38,8);   gfx_panel=gfx_rgb(38,28,10);  gfx_accent=gfx_rgb(255,190,70); break;
     }
-    gfx_text_c = gfx_rgb(235,235,245);
-    gfx_dim = gfx_rgb(145,145,165);
+    gfx_text_c = gfx_rgb(235,240,250);
+    gfx_dim = gfx_rgb(150,160,180);
 }
 
 static void gui_loop(void)
@@ -572,10 +623,21 @@ static void gui_loop(void)
         }
         EFI_INPUT_KEY key;
         if (!EFI_IS_ERROR(ST->ConIn->ReadKeyStroke(ST->ConIn, &key))) {
-            if (key.ScanCode == 0x14) gfx_done = 1;
+            if (key.UnicodeChar == L's' && focus_win < 0) { win_open(WIN_SETTINGS); }
+            else if (key.ScanCode == 0x14) gfx_done = 1;
             else if (key.ScanCode == 0x17) {
                 if (focus_win >= 0) win_close(focus_win);
                 else gfx_done = 1;
+            } else if (focus_win >= 0 && wins[focus_win].alive && wins[focus_win].type == WIN_SETTINGS) {
+                if (key.UnicodeChar >= L'1' && key.UnicodeChar <= L'5') {
+                    theme_index = (int)(key.UnicodeChar - L'1');
+                    apply_theme();
+                }
+            } else if (focus_win >= 0 && wins[focus_win].alive && wins[focus_win].type == WIN_SETTINGS) {
+                if (key.UnicodeChar >= L'1' && key.UnicodeChar <= L'5') {
+                    theme_index = (int)(key.UnicodeChar - L'1');
+                    apply_theme();
+                }
             } else if (focus_win >= 0 && wins[focus_win].alive && wins[focus_win].type == WIN_TERM) {
                 handle_term_key(&wins[focus_win], key);
             }

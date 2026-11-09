@@ -25,7 +25,7 @@ typedef struct EFI_ABSOLUTE_POINTER_PROTOCOL {
 /* ---- 内核服务（供 gui.inc 使用） ---- */
 static CHAR16 CWD_BUF[512];
 #define CWD CWD_BUF
-int theme_index = 0;
+int theme_index = 0;   /* 0=Blue 默认 */
 int gfx_active = 0;
 #define HIST_MAX 4096
 static char hist[HIST_MAX];

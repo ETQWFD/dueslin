@@ -235,14 +235,25 @@ static void BuildPage(void) {
 
 /* ---------- 下载（重试 3 次） ---------- */
 static BOOL DownloadFile(const wchar_t *url, const wchar_t *dest) {
+    /* 主站失败时回退镜像站（国内网络常见直连中断） */
+    for (int pass = 0; pass < 2; pass++) {
+        wchar_t real[512];
+        if (pass == 0) wcscpy(real, url);
+        else swprintf(real, 512, L"https://ghproxy.net/%s", url);
     for (int attempt = 1; attempt <= 3; attempt++) {
         wchar_t s[128];
         swprintf(s, 128, L"正在下载镜像（第 %d/3 次尝试）...", attempt);
         SetStatus(s);
-        HRESULT hr = URLDownloadToFileW(NULL, url, dest, 0, NULL);
-        if (SUCCEEDED(hr)) return TRUE;
+        HRESULT hr = URLDownloadToFileW(NULL, real, dest, 0, NULL);
+        if (SUCCEEDED(hr)) {
+            LARGE_INTEGER got = {0};
+            HANDLE hf = CreateFileW(dest, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+            if (hf != INVALID_HANDLE_VALUE) { GetFileSizeEx(hf, &got); CloseHandle(hf); }
+            if (got.QuadPart > 0) return TRUE;
+        }
         SetStatus(L"连接中断，正在自动重试...");
         Sleep(1500);
+    }
     }
     return FALSE;
 }
@@ -290,19 +301,35 @@ static DWORD WINAPI Worker(LPVOID param) {
             InterlockedExchange(&g_busy, 0);
             return 0;
         }
-        BYTE buf[1 << 20];
-        DWORD rd, wr, total = 0;
+        /* 1MB 缓冲区必须放堆上：线程默认栈仅 1MB，栈上分配会直接崩 */
+        BYTE *buf = (BYTE *)HeapAlloc(GetProcessHeap(), 0, 1 << 20);
+        if (!buf) {
+            CloseHandle(src); CloseHandle(dst);
+            SetStatus(L"刻录失败：内存不足。");
+            InterlockedExchange(&g_busy, 0);
+            return 0;
+        }
+        DWORD rd = 0, wr = 0, total = 0;
         LARGE_INTEGER sz = {0};
         GetFileSizeEx(src, &sz);
-        while (ReadFile(src, buf, sizeof(buf), &rd, NULL) && rd > 0) {
-            WriteFile(dst, buf, rd, &wr, NULL);
+        BOOL ioerr = FALSE;
+        while (ReadFile(src, buf, 1 << 20, &rd, NULL) && rd > 0) {
+            wr = 0;
+            if (!WriteFile(dst, buf, rd, &wr, NULL) || wr != rd) { ioerr = TRUE; break; }
             total += rd;
             if (sz.QuadPart > 0) {
                 int pct = (int)(total * 100 / sz.QuadPart);
                 SendMessageW(GetDlgItem(d, IDC_PROGRESS), PBM_SETPOS, pct, 0);
             }
         }
+        FlushFileBuffers(dst);
+        HeapFree(GetProcessHeap(), 0, buf);
         CloseHandle(src); CloseHandle(dst);
+        if (ioerr) {
+            SetStatus(L"刻录失败：写入设备出错（U 盘可能已损坏，或未以管理员运行）。");
+            InterlockedExchange(&g_busy, 0);
+            return 0;
+        }
         SendMessageW(GetDlgItem(d, IDC_PROGRESS), PBM_SETPOS, 100, 0);
         SetStatus(L"刻录完成！可以拔出 U 盘用于启动安装。");
     } else {

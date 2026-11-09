@@ -93,6 +93,13 @@ fi
 # 展开 GRUB 默认启动项（VM 版传 DUESLIN_GRUB_DEFAULT=2 直进 auto 安装）
 sed -i 's/\${DUESLIN_GRUB_DEFAULT:-\?[01]}/'"${DUESLIN_GRUB_DEFAULT:-1}"'/g' "$STAGE/boot/grub/grub.cfg"
 
+# WCT 自研内核（UEFI 原生）：放进 ISO，可 UEFI 直接启动进桌面
+mkdir -p "$STAGE/wct"
+if [ -f "$PWD/wct/kernel/build/wctk.efi" ]; then
+    cp "$PWD/wct/kernel/build/wctk.efi" "$STAGE/wct/wctk.efi"
+    echo "  WCT 内核已打包: wct/wctk.efi ($(stat -c%s "$STAGE/wct/wctk.efi") B)"
+fi
+
 echo "[5/5] 生成 ISO ..."
 grub-mkrescue -o "$OUTISO" "$STAGE" --xorriso=xorriso 2>&1 | tail -3
 echo "完成: $OUTISO ($(du -h "$OUTISO" | cut -f1))"
