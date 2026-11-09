@@ -1,0 +1,536 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+DUESLIN 安装器 — 键盘操作版
+按键: ↑↓=选择  n=勾选/切换  k=下一步  o=上一步  w=确定
+流程: 欢迎 -> 语言 -> 许可协议 -> 磁盘选择 -> 安装(WIM解压) -> 完成(5秒自动重启)
+运行环境: DUESLIN live/PE 环境（root）
+"""
+import os, re, sys, time, subprocess, glob, shutil
+
+SRC_MARKER = "/run/dueslin_src"
+MODE_MARKER = "/run/dueslin_mode"
+
+def log(msg):
+    print("[INSTALLER] %s" % msg, flush=True)
+
+def run(cmd):
+    return subprocess.run(cmd, shell=True, capture_output=True)
+
+def run_log(cmd):
+    r = subprocess.run(cmd, shell=True, capture_output=True)
+    out = (r.stdout.decode() + r.stderr.decode()).strip()
+    if out:
+        log("CMD %s | %s" % (cmd, out.replace("\n", " ")[:260]))
+    return r
+
+def _find_wim():
+    """查找安装源 WIM：标记文件 -> 已挂载点 -> 强制挂载 CD（含重试）"""
+    if os.path.exists(SRC_MARKER):
+        with open(SRC_MARKER) as f:
+            src = f.read().strip()
+        if src and os.path.exists(src):
+            return src
+    # 已挂载点
+    for cand in glob.glob("/media/*/boot/dueslin/DUESLIN.wim"):
+        return cand
+    # 直接解析 /proc/mounts 找 sr0 挂载点（initramfs 已挂载）
+    r = run("grep -E 'sr[0-9]|cdrom' /proc/mounts 2>/dev/null | awk '{print $2}' | head -1")
+    mnt = r.stdout.decode().strip() if r.stdout else ""
+    if mnt:
+        for cand in glob.glob(mnt + "/boot/dueslin/DUESLIN.wim") + glob.glob(mnt + "/*/boot/dueslin/DUESLIN.wim") + glob.glob(mnt + "/dueslin/DUESLIN.wim"):
+            if os.path.exists(cand):
+                return cand
+    # 卸载 switch_root 残留挂载，重新挂载 CD 到本环境可见点
+    run("umount /dev/sr0 2>/dev/null; umount /dev/sr1 2>/dev/null; umount /media/cdrom 2>/dev/null; sleep 1")
+    run("modprobe sr_mod 2>/dev/null; modprobe isofs 2>/dev/null; sleep 2")
+    for _ in range(6):
+        os.makedirs("/media/cdrom", exist_ok=True)
+        for dev in ["/dev/sr0", "/dev/sr1", "/dev/cdrom", "/dev/cdrom0"]:
+            if os.path.exists(dev):
+                run("mount -t iso9660 -o ro %s /media/cdrom 2>/dev/null" % dev)
+        for base in ["/media", "/run", "/mnt", "/tmp"]:
+            for cand in glob.glob(base + "/*/boot/dueslin/DUESLIN.wim"):
+                return cand
+        time.sleep(2)
+    # 兜底：全盘查找（覆盖任意挂载点）
+    r = run("find /media /run /mnt /tmp -maxdepth 6 -name DUESLIN.wim 2>/dev/null | head -1")
+    out = r.stdout.decode().strip() if r.stdout else ""
+    return out if out else None
+
+def list_disks():
+    """扫描所有真实块设备（SATA/SCSI/NVMe/virtio/IDE/USB/MMC/RAID），
+    排除光驱(rom)、内存盘(ram)、设备映射(dm)、loop、zram 等不可安装设备。"""
+    disks = []
+    skip = ("loop", "ram", "zram", "dm-", "md", "sr", "nbd", "fd")
+    try:
+        for name in sorted(os.listdir("/sys/block")):
+            if name.startswith(skip):
+                continue
+            blk = "/sys/block/%s" % name
+            # 可移动介质(U盘/移动硬盘)允许安装
+            devnodes = glob.glob("/sys/block/%s/device/block" % name)
+            dev = "/dev/%s" % name
+            if not os.path.exists(dev):
+                # NVMe/MMC 的设备节点在子目录里：/sys/block/nvme0n1/device
+                continue
+            try:
+                with open("%s/size" % blk) as f:
+                    secs = int(f.read().strip())
+                if secs <= 0:
+                    continue
+            except Exception:
+                pass
+            # 跳过只有 <2GB 的设备（装不下系统）
+            try:
+                if secs * 512 < 2 * 1024 * 1024 * 1024:
+                    continue
+            except Exception:
+                pass
+            if os.path.exists(blk + "/ro") :
+                try:
+                    if open(blk + "/ro").read().strip() == "1":
+                        continue
+                except Exception:
+                    pass
+            disks.append(dev)
+    except Exception:
+        pass
+    # 兜底：老环境 /sys/block 不可读时按命名规则找
+    if not disks:
+        for pat in ["/dev/sd[a-z]", "/dev/vd[a-z]", "/dev/hd[a-z]",
+                    "/dev/nvme[0-9]n[0-9]", "/dev/mmcblk[0-9]"]:
+            for d in sorted(glob.glob(pat)):
+                if d not in disks and os.path.exists(d):
+                    disks.append(d)
+    return disks
+
+def disk_size(disk):
+    try:
+        with open("/sys/class/block/%s/size" % os.path.basename(disk)) as f:
+            secs = int(f.read().strip())
+        return "%.1f GB" % (secs * 512 / 1024 / 1024 / 1024)
+    except Exception:
+        return "?"
+
+LANGS = [("zh_CN", "简体中文"), ("en_US", "English (US)"),
+         ("zh_TW", "繁體中文"), ("ja_JP", "日本語")]
+EULA = [
+"DUESLIN 系统最终用户许可协议",
+"",
+"1. DUESLIN 由开发者 ETC 发行，遵循开源 MIT 许可。",
+"2. 您可以在任意数量、任意品牌的电脑上安装与使用本系统。",
+"3. 安装即表示您同意：系统可能包含第三方开源组件，",
+"   其许可条款详见系统内 /usr/share/licenses 目录。",
+"4. 因使用本系统造成的数据损失，开发者不承担任何责任。",
+"5. 如需商业分发，请联系开发者。",
+"",
+"按 n 勾选「我已阅读并同意」，按 k 下一步。",
+]
+
+class TUI:
+    def __init__(self, stdscr):
+        import curses
+        self.curses = curses
+        self.scr = stdscr
+        try:
+            self.curses.curs_set(0)
+            self.scr.keypad(True)
+        except Exception:
+            pass
+        self.H, self.W = self.scr.getmaxyx()
+        self.lang_idx = 0
+        self.agree = False
+        self.disk_idx = 0
+        self.disks = list_disks()
+        self.scr.refresh()
+
+    def title(self, text):
+        self.scr.addstr(2, 4, text, self.curses.A_BOLD | self.curses.A_REVERSE)
+
+    def hint(self):
+        try:
+            self.scr.addstr(self.H - 2, 4,
+                "↑↓ 选择    n 勾选    o 上一步    k 下一步    w 确定/确认",
+                self.curses.A_DIM)
+        except Exception:
+            pass
+
+    def msg(self, y, x, text, attr=0):
+        try:
+            self.scr.addstr(y, x, text[:max(0, self.W - x - 2)], attr)
+        except Exception:
+            pass
+
+    def key(self):
+        return self.scr.getch()
+
+    def screen_welcome(self):
+        self.scr.clear()
+        self.title("  DUESLIN 安装程序  ")
+        logo = [
+"   ██████╗ ██╗   ██╗███████╗███████╗██╗     ██╗███╗   ██╗",
+"   ██╔══██╗██║   ██║██╔════╝██╔════╝██║     ██║████╗  ██║",
+"   ██║  ██║██║   ██║█████╗  ███████╗██║  █  ██║██╔██╗ ██║",
+"   ██║  ██║██║   ██║██╔══╝  ╚════██║██║ ██╗ ██║██║╚██╗██║",
+"   ██████╔╝╚██████╔╝███████╗███████║╚███╔███╔╝██║ ╚████║",
+"   ╚═════╝  ╚═════╝ ╚══════╝╚══════╝ ╚══╝╚══╝ ╚═╝  ╚═══╝",
+]
+        for i, line in enumerate(logo):
+            self.msg(5 + i, max(0, (self.W - len(line)) // 2), line, self.curses.A_BOLD)
+        self.msg(12, max(0, (self.W - 30) // 2), "DUESLIN 安装程序 1.0  开发者 ETC", self.curses.A_BOLD)
+        self.msg(13, max(0, (self.W - 26) // 2), "仅需 400MB+ 磁盘 · 1GB 内存可运行")
+        self.msg(15, max(0, (self.W - 28) // 2), "按 w 开始安装")
+        self.hint()
+        while True:
+            k = self.key()
+            if k in (ord("w"), ord("W")): return "lang"
+            if k in (ord("o"), ord("O"), 27): return "exit"
+
+    def screen_lang(self):
+        while True:
+            self.scr.clear()
+            self.title("  选择语言 / Select Language  ")
+            for i, (code, name) in enumerate(LANGS):
+                arrow = "->" if i == self.lang_idx else "  "
+                self.msg(6 + i * 2, 8, "%s %-10s %s" % (arrow, code, name),
+                         self.curses.A_REVERSE if i == self.lang_idx else 0)
+            self.msg(self.H - 4, 4, "↑↓ 选择语言，w 确认")
+            self.hint()
+            k = self.key()
+            if k == self.curses.KEY_UP and self.lang_idx > 0: self.lang_idx -= 1
+            elif k == self.curses.KEY_DOWN and self.lang_idx < len(LANGS) - 1: self.lang_idx += 1
+            elif k in (ord("w"), ord("W")): return "license"
+            elif k in (ord("o"), ord("O"), 27): return "welcome"
+
+    def screen_license(self):
+        while True:
+            self.scr.clear()
+            self.title("  许可协议 / License  ")
+            for i, line in enumerate(EULA):
+                self.msg(4 + i, 4, line)
+            st = "[X] 我已阅读并同意" if self.agree else "[ ] 我已阅读并同意"
+            self.msg(4 + len(EULA), 4, st, self.curses.A_BOLD if self.agree else 0)
+            self.hint()
+            k = self.key()
+            if k in (ord("n"), ord("N")): self.agree = not self.agree
+            elif k in (ord("k"), ord("K")) and self.agree: return "disk"
+            elif k in (ord("o"), ord("O"), 27): return "lang"
+
+    def screen_disk(self):
+        if not self.disks:
+            self.scr.clear()
+            self.title("  未检测到磁盘  ")
+            self.msg(6, 4, "没有找到可安装的磁盘，请检查硬盘连接。")
+            self.msg(8, 4, "按 o 返回，w 退出")
+            while True:
+                k = self.key()
+                if k in (ord("o"), ord("O"), 27): return "license"
+                if k in (ord("w"), ord("W")): return "exit"
+        while True:
+            self.scr.clear()
+            self.title("  选择安装磁盘  ")
+            self.msg(4, 4, "↑↓ 选择磁盘，w 确认（将格式化整盘安装）")
+            for i, d in enumerate(self.disks):
+                sel = "->" if i == self.disk_idx else "  "
+                self.msg(6 + i * 2, 8, "%s %-16s %s" % (sel, d, disk_size(d)),
+                         self.curses.A_REVERSE if i == self.disk_idx else 0)
+            self.hint()
+            k = self.key()
+            if k == self.curses.KEY_UP and self.disk_idx > 0: self.disk_idx -= 1
+            elif k == self.curses.KEY_DOWN and self.disk_idx < len(self.disks) - 1: self.disk_idx += 1
+            elif k in (ord("w"), ord("W")):
+                self.scr.clear()
+                self.title("  确认安装  ")
+                self.msg(6, 4, "将格式化并安装到磁盘：%s (%s)" % (
+                    self.disks[self.disk_idx], disk_size(self.disks[self.disk_idx])))
+                self.msg(8, 4, "磁盘上所有数据将被清除！")
+                self.msg(10, 4, "按 w 开始安装，按 o 返回")
+                while True:
+                    k2 = self.key()
+                    if k2 in (ord("w"), ord("W")): return "install"
+                    if k2 in (ord("o"), ord("O"), 27): break
+            elif k in (ord("o"), ord("O"), 27): return "license"
+
+    def screen_install(self):
+        disk = self.disks[self.disk_idx]
+        self.scr.clear()
+        self.title("  正在安装 DUESLIN  ")
+        self.msg(4, 4, "目标磁盘: %s" % disk)
+        log("开始安装到 %s" % disk)
+        self._do_install(disk)
+        self.scr.clear()
+        self.title("  安装完成  ")
+        self.msg(6, 4, "DUESLIN 安装完成！", self.curses.A_BOLD)
+        self.msg(8, 4, "取出安装介质，电脑将在 5 秒后自动重启...")
+        self.msg(10, 4, "按 w 立即重启")
+        log("触发重启")
+        self.scr.refresh()
+        self.scr.timeout(1000)
+        for i in range(5, 0, -1):
+            self.msg(12, 4, "倒计时: %d 秒" % i)
+            self.scr.refresh()
+            k = self.key()
+            if k in (ord("w"), ord("W")):
+                log("立即重启")
+                os.system("reboot -f")
+                return "done"
+        log("自动重启")
+        os.system("reboot -f")
+        return "done"
+
+    def _do_install(self, disk):
+        log("分区 %s ..." % disk)
+        run("umount %s?* 2>/dev/null; true" % disk)
+        run("swapoff %s?* 2>/dev/null; true" % disk)
+        run("wipefs -a %s 2>/dev/null; dd if=/dev/zero of=%s bs=1M count=2 conv=notrunc 2>/dev/null" % (disk, disk))
+        run_log("parted -s %s mklabel msdos" % disk)
+        run_log("parted -s %s mkpart primary fat32 2MiB 514MiB" % disk)
+        run_log("parted -s %s mkpart primary ext4 514MiB 100%%" % disk)
+        run_log("parted -s %s set 1 boot on" % disk)
+        run_log("partprobe %s 2>/dev/null; blockdev --rereadpt %s 2>/dev/null; sleep 2" % (disk, disk))
+        for _try in range(3):
+            if os.path.exists("%s2" % disk) and os.path.exists("%s3" % disk):
+                break
+            run("partprobe %s 2>/dev/null; blockdev --rereadpt %s 2>/dev/null; sleep 2" % (disk, disk))
+        time.sleep(1)
+        p1, p2 = "%s1" % disk, "%s2" % disk   # MBR: p1=ESP(FAT32), p2=root(ext4)
+        for backoff in range(3):
+            if os.path.exists(p1) and os.path.exists(p2): break
+            run("partprobe %s 2>/dev/null; blockdev --rereadpt %s 2>/dev/null; sleep 2" % (disk, disk))
+        run("umount %s 2>/dev/null; umount %s 2>/dev/null; sleep 1" % (p1, p2))
+        run_log("mkfs.fat -F32 -n DUESLIN_ESP %s" % p1)
+        run_log("mkfs.ext4 -F -L DUESLIN_ROOT %s" % p2)
+        mnt = "/mnt/dueslin"
+        run("mkdir -p %s" % mnt)
+        run_log("mount %s %s" % (p2, mnt))
+        run("mkdir -p %s/boot" % mnt)
+        run_log("mount %s %s" % (p1, mnt + "/boot"))
+        src = None
+        if os.path.exists(SRC_MARKER):
+            with open(SRC_MARKER) as f: src = f.read().strip()
+        if not src or not os.path.exists(src):
+            src = _find_wim()
+        if not src:
+            log("错误: 未找到 DUESLIN.wim 系统镜像")
+            return
+        log("解压 WIM: %s -> %s" % (src, mnt))
+        r = run_log("wimlib-imagex apply %s 1 %s --no-acls 2>&1" % (src, mnt))
+        if r.returncode != 0:
+            run("cp -a /run/dueslin_rootfs/. %s/ 2>/dev/null" % mnt)
+        # ---- 复制内核与 initramfs 到 ESP 和 root 分区（修复重启后找不到内核）----
+        ks = None
+        for k in ["/media/cdrom/boot/dueslin", "/media/*/boot/dueslin",
+                  "/run/dueslin_iso/boot/dueslin", "/boot/dueslin"]:
+            for kd in glob.glob(k):
+                if os.path.exists(kd + "/vmlinuz") and os.path.exists(kd + "/initramfs"):
+                    ks = kd
+                    break
+            if ks: break
+        log("内核来源: %s" % ks)
+        if ks:
+            run("cp -f %s/vmlinuz %s/vmlinuz 2>/dev/null" % (ks, mnt + "/boot"))
+            run("cp -f %s/initramfs %s/initramfs 2>/dev/null" % (ks, mnt + "/boot"))
+            run("mkdir -p %s/boot/dueslin" % mnt)
+            run("cp -f %s/vmlinuz %s/boot/vmlinuz 2>/dev/null" % (ks, mnt))
+            run("cp -f %s/initramfs %s/boot/initramfs 2>/dev/null" % (ks, mnt))
+            run("cp -f %s/vmlinuz %s/boot/dueslin/vmlinuz 2>/dev/null" % (ks, mnt))
+            run("cp -f %s/initramfs %s/boot/dueslin/initramfs 2>/dev/null" % (ks, mnt))
+            log("内核已复制: ESP=/vmlinuz root=/boot/vmlinuz")
+        else:
+            log("警告: 未找到内核文件，系统可能无法启动")
+
+        log("安装引导 ...")
+        # ---- 确定性 BIOS 引导：使用构建时配对的 boot.img + core.img（同版本，避免卡 GRUB）----
+        pairdir = None
+        for pd in ["/usr/share/dueslin", "/media/cdrom/dueslin", "/run/dueslin_iso/dueslin"]:
+            if os.path.exists(pd + "/boot.img") and os.path.exists(pd + "/core.img"):
+                pairdir = pd; break
+        if pairdir:
+            # 只写前 446 字节引导代码，保留分区表
+            run_log("dd if=%s/boot.img of=%s bs=446 count=1 conv=notrunc 2>&1" % (pairdir, disk))
+            # core.img 紧接 LBA1 起（MBR 布局，<62 扇区）
+            run_log("dd if=%s/core.img of=%s bs=512 seek=1 conv=notrunc 2>&1" % (pairdir, disk))
+            # GRUB 模块与配置写入 ESP（core 需要 /grub/i386-pc/normal.mod）
+            run("mkdir -p %s/boot/grub/i386-pc" % mnt)
+            modsrc = None
+            for md in ["%s/grub-modules" % pairdir, "%s/../dueslin/grub-modules" % pairdir]:
+                if os.path.isdir(md): modsrc = md; break
+            if modsrc:
+                run_log("cp -a %s/. %s/boot/grub/i386-pc/ 2>&1" % (modsrc, mnt))
+                log("GRUB 模块已复制到 ESP")
+            else:
+                for md in ["/usr/lib/grub/i386-pc", "/media/cdrom/dueslin/grub-modules"]:
+                    if os.path.isdir(md):
+                        run_log("cp -a %s/. %s/boot/grub/i386-pc/ 2>&1" % (md, mnt)); break
+            run("sync")
+            log("BIOS 引导已写入（446B boot code + core@LBA1 + GRUB 模块）")
+        if os.path.exists("/sys/firmware/efi"):
+            run_log("grub-install --target=x86_64-efi --efi-directory=%s/boot --boot-directory=%s/boot --removable 2>&1" % (mnt, mnt))
+        # 检查 MBR：grub-install 通常已写 stage1；若未写（GPT 盘）才手动补
+        _mbr = run("dd if=%s bs=512 count=1 2>/dev/null | head -c 2 | od -An -tx1" % disk)
+        _mbr_ok = b"eb 63" in (_mbr.stdout or b"")
+        log("MBR 检查: %s %s" % (_mbr.stdout.strip(), "OK" if _mbr_ok else "缺失"))
+        if _mbr_ok:
+            log("grub-install 已写 MBR stage1，跳过手动补写")
+        else:
+            # 从盘内提取同源 boot.img（与 core 版本匹配），取不到再用 live 的
+            run("chroot %s dd if=/usr/lib/grub/i386-pc/boot.img of=/tmp/mbr.bin bs=512 count=1 2>/dev/null" % mnt)
+            if not os.path.exists("/tmp/mbr.bin") or os.path.getsize("/tmp/mbr.bin") != 512:
+                run("dd if=/usr/lib/grub/i386-pc/boot.img of=/tmp/mbr.bin bs=512 count=1 2>/dev/null")
+            log("补写 MBR stage1 (core LBA=2048)")
+        run_log("dd if=/usr/lib/grub/i386-pc/boot.img of=/tmp/mbr.bin bs=512 count=1 2>&1")
+        try:
+            with open("/tmp/mbr.bin", "rb") as f:
+                mb = bytearray(f.read())
+            mb[0x40:0x44] = bytes([0x00, 0x08, 0x00, 0x00])
+            with open("/tmp/mbr.bin", "wb") as f:
+                f.write(bytes(mb))
+            log("LBA 指针已写 2048")
+        except Exception as e:
+            log("LBA 写入异常: %s" % e)
+        run_log("dd if=/tmp/mbr.bin of=%s bs=512 count=1 conv=notrunc 2>&1" % disk)
+        r = run("dd if=%s bs=512 count=1 2>/dev/null | head -c 2 | od -An -tx1" % disk)
+        log("MBR 验证: %s" % r.stdout.strip())
+        rootdev = "%s2" % disk
+        cfg = """set timeout=5
+set default=0
+insmod part_gpt
+insmod fat
+insmod ext2
+insmod linux
+set root=(hd0,msdos1)
+if [ -f /vmlinuz ]; then
+  linux /vmlinuz root=%s rw quiet
+  initrd /initramfs
+else
+  set root=(hd0,msdos2)
+  linux /boot/vmlinuz root=%s rw quiet
+  initrd /boot/initramfs
+fi
+boot
+""" % (rootdev, rootdev)
+        run("mkdir -p %s/boot/grub" % mnt)
+        with open("%s/boot/grub/grub.cfg" % mnt, "w") as f:
+            f.write(cfg)
+        run("sync")
+        log("安装完成")
+
+    def run(self):
+        cur = "welcome"
+        while True:
+            if cur == "welcome": cur = self.screen_welcome()
+            elif cur == "lang": cur = self.screen_lang()
+            elif cur == "license": cur = self.screen_license()
+            elif cur == "disk": cur = self.screen_disk()
+            elif cur == "install": cur = self.screen_install()
+            elif cur in ("exit", "done"): return cur
+
+def _auto_install(disk):
+    """自动/无人值守安装（MODE_MARKER 存在时）"""
+    log("auto_support=AUTO_OK")
+    log("开始安装到 %s" % disk)
+    run("wipefs -a %s" % disk)
+    run_log("parted -s %s mklabel gpt" % disk)
+    run_log("parted -s %s mkpart primary 1MiB 2MiB" % disk)
+    run_log("parted -s %s set 1 bios_grub on" % disk)
+    run_log("parted -s %s mkpart primary fat32 2MiB 514MiB" % disk)
+    run_log("parted -s %s set 2 esp on" % disk)
+    run_log("parted -s %s mkpart primary ext4 514MiB 100%%" % disk)
+    run_log("partprobe %s" % disk)
+    time.sleep(2)
+    p2, p3 = "%s2" % disk, "%s3" % disk
+    run("umount %s 2>/dev/null; umount %s 2>/dev/null; sleep 1" % (p3, p2))
+    run_log("mkfs.fat -F32 -n DUESLIN_ESP %s" % p2)
+    run_log("mkfs.ext4 -F -L DUESLIN_ROOT %s" % p3)
+    mnt = "/mnt/dueslin"
+    run("mkdir -p %s" % mnt)
+    run_log("mount %s %s" % (p3, mnt))
+    run("mkdir -p %s/boot" % mnt)
+    run_log("mount %s %s" % (p2, mnt + "/boot"))
+    src = None
+    if os.path.exists(SRC_MARKER):
+        with open(SRC_MARKER) as f: src = f.read().strip()
+    if not src or not os.path.exists(src):
+        src = _find_wim()
+    if not src:
+        log("错误: 未找到 DUESLIN.wim")
+        return
+    log("解压 WIM: %s -> %s" % (src, mnt))
+    r = run_log("wimlib-imagex apply %s 1 %s --no-acls 2>&1" % (src, mnt))
+    if r.returncode != 0:
+        run("cp -a /run/dueslin_rootfs/. %s/ 2>/dev/null" % mnt)
+    log("安装引导 ...")
+    if os.path.exists("/sys/firmware/efi"):
+        run_log("grub-install --target=x86_64-efi --efi-directory=%s/boot --boot-directory=%s/boot --removable 2>&1" % (mnt, mnt))
+    else:
+        run("mount --bind /dev %s/dev 2>/dev/null; mount --bind /proc %s/proc 2>/dev/null; mount --bind /sys %s/sys 2>/dev/null" % (mnt, mnt, mnt))
+        r = run_log("chroot %s grub-install --target=i386-pc --boot-directory=/boot %s 2>&1" % (mnt, disk))
+        run("umount %s/sys 2>/dev/null; umount %s/proc 2>/dev/null; umount %s/dev 2>/dev/null" % (mnt, mnt, mnt))
+        if r.returncode != 0:
+            run_log("grub-install --target=i386-pc --boot-directory=%s/boot %s 2>&1" % (mnt, disk))
+        # 检查 MBR：grub-install 通常已写 stage1；若未写（GPT 盘）才手动补
+        _mbr = run("dd if=%s bs=512 count=1 2>/dev/null | head -c 2 | od -An -tx1" % disk)
+        _mbr_ok = b"eb 63" in (_mbr.stdout or b"")
+        log("MBR 检查: %s %s" % (_mbr.stdout.strip(), "OK" if _mbr_ok else "缺失"))
+        if _mbr_ok:
+            log("grub-install 已写 MBR stage1，跳过手动补写")
+        else:
+            # 从盘内提取同源 boot.img（与 core 版本匹配），取不到再用 live 的
+            run("chroot %s dd if=/usr/lib/grub/i386-pc/boot.img of=/tmp/mbr.bin bs=512 count=1 2>/dev/null" % mnt)
+            if not os.path.exists("/tmp/mbr.bin") or os.path.getsize("/tmp/mbr.bin") != 512:
+                run("dd if=/usr/lib/grub/i386-pc/boot.img of=/tmp/mbr.bin bs=512 count=1 2>/dev/null")
+            log("补写 MBR stage1 (core LBA=2048)")
+        run_log("dd if=/usr/lib/grub/i386-pc/boot.img of=/tmp/mbr.bin bs=512 count=1 2>&1")
+        try:
+            with open("/tmp/mbr.bin", "rb") as f:
+                mb = bytearray(f.read())
+            mb[0x40:0x44] = bytes([0x00, 0x08, 0x00, 0x00])
+            with open("/tmp/mbr.bin", "wb") as f:
+                f.write(bytes(mb))
+            log("LBA 指针已写 2048")
+        except Exception as e:
+            log("LBA 写入异常: %s" % e)
+        run_log("dd if=/tmp/mbr.bin of=%s bs=512 count=1 conv=notrunc 2>&1" % disk)
+        r = run("dd if=%s bs=512 count=1 2>/dev/null | head -c 2 | od -An -tx1" % disk)
+        log("MBR 验证: %s" % r.stdout.strip())
+    rootdev = "%s3" % disk
+    cfg = """set timeout=5
+set default=0
+menuentry "DUESLIN" {
+  search --no-floppy --set=root --label DUESLIN_ROOT
+  linux /boot/dueslin/vmlinuz root=%s rw console=tty0
+  initrd /boot/dueslin/initramfs
+}
+""" % rootdev
+    run("mkdir -p %s/boot/grub" % mnt)
+    with open("%s/boot/grub/grub.cfg" % mnt, "w") as f:
+        f.write(cfg)
+    run("sync")
+    log("安装完成")
+    log("触发重启")
+    os.system("reboot -f")
+
+def main():
+    import curses, sys
+    mode = "auto" if (os.path.exists(MODE_MARKER) or "--auto" in sys.argv) else "gui"
+    if mode == "auto":
+        disks = list_disks()
+        if not disks:
+            log("错误: 未找到磁盘")
+            return 1
+        _auto_install(disks[0])
+        return 0
+    def _run(stdscr):
+        t = TUI(stdscr)
+        return t.run()
+    try:
+        curses.wrapper(_run)
+    except Exception as e:
+        log("curses 不可用: %s" % e)
+        disks = list_disks()
+        if disks:
+            _auto_install(disks[0])
+
+if __name__ == "__main__":
+    main()

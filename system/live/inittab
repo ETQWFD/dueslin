@@ -1,0 +1,19 @@
+::sysinit:/bin/mount -t devtmpfs devtmpfs /dev 2>/dev/null
+::sysinit:/bin/mkdir -p /dev/pts /dev/shm /run /tmp/.X11-unix /tmp/runtime-root /var/log
+::sysinit:/bin/mount -t devpts devpts /dev/pts 2>/dev/null
+::sysinit:/bin/mount -t tmpfs tmpfs /run 2>/dev/null
+::sysinit:/bin/mount -t proc proc /proc
+::sysinit:/bin/mount -t sysfs sysfs /sys
+::sysinit:/bin/chmod 1777 /tmp/.X11-unix
+::sysinit:/bin/chmod 700 /tmp/runtime-root
+
+# tty1 直接 exec xinit（不用 su/login/getty）
+tty1::respawn:/bin/sh -c 'exec /usr/bin/dueslin-live-start'
+
+tty2::respawn:/sbin/getty 38400 tty2
+tty3::respawn:/sbin/getty 38400 tty3
+tty4::respawn:/sbin/getty 38400 tty4
+tty5::respawn:/sbin/getty 38400 tty5
+tty6::respawn:/sbin/getty 38400 tty6
+::ctrlaltdel:/sbin/reboot
+::shutdown:/sbin/umount -r -a
