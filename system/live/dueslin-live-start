@@ -1,0 +1,69 @@
+#!/bin/sh
+# DUESLIN live 启动入口：install 模式跑安装器（先诊断 CD），桌面模式进 X
+# 串口仅在有 ttyS0 时输出（VMware/无串口环境不报 I/O error）
+slog() {
+    [ -e /dev/ttyS0 ] && echo "$*" > /dev/ttyS0 2>/dev/null
+    return 0
+}
+
+# 输入设备驱动
+for m in psmouse mousedev atkbd serio_raw evdev usbhid hid-generic; do
+    /sbin/modprobe "$m" 2>/dev/null
+done
+
+# udev：日志压到 error，避免 resize 警告刷屏
+mkdir -p /run/udev
+/sbin/udevd --daemon 2>/dev/null
+/sbin/udevadm control --log-priority=err 2>/dev/null
+/sbin/udevadm trigger --type=devices 2>/dev/null
+/sbin/udevadm settle --timeout=5 2>/dev/null
+sleep 1
+
+mount_cdrom() {
+    # 幂等挂载：已挂载则跳过
+    grep -q " /media/cdrom " /proc/mounts 2>/dev/null && return 0
+    mkdir -p /media/cdrom
+    /sbin/modprobe sr_mod 2>/dev/null
+    /sbin/modprobe isofs 2>/dev/null
+    sleep 2
+    for _try in 1 2 3 4 5; do
+        for dev in /dev/sr0 /dev/sr1 /dev/cdrom /dev/cdrom0; do
+            [ -b "$dev" ] || continue
+            mount -t iso9660 -o ro "$dev" /media/cdrom 2>/dev/null && break 2
+            mount -t udf -o ro "$dev" /media/cdrom 2>/dev/null && break 2
+        done
+        /sbin/modprobe sr_mod 2>/dev/null; /sbin/modprobe isofs 2>/dev/null
+        sleep 2
+    done
+    ls /media/cdrom >/dev/null 2>&1 && slog "[live-start] 光驱已挂载" || slog "[live-start] 光驱挂载失败"
+    return 0
+}
+
+if grep -q install /proc/cmdline; then
+    slog "[live-start] install 模式"
+    mount_cdrom
+    slog "[live-start] WIM: $(ls /media/*/boot/dueslin/DUESLIN.wim 2>/dev/null | head -1)"
+    AUTO=""
+    if grep -q autoinstall /proc/cmdline; then
+        AUTO="--auto"
+        touch /run/dueslin_mode 2>/dev/null
+        touch /run/dueslin_src 2>/dev/null
+    fi
+    export TERM=linux
+    # 安装器环境启用 gpm 鼠标光标（有 gpm 才启动，失败不影响安装）
+    if [ -x /usr/sbin/gpm ]; then
+        if ! pidof gpm >/dev/null 2>&1; then
+            /usr/sbin/gpm -m /dev/input/mice -t imps2 -A 2>/dev/null &
+        fi
+        if ! pidof gpm >/dev/null 2>&1; then
+            /usr/sbin/gpm -m /dev/input/mice -t exps2 -A 2>/dev/null &
+        fi
+        sleep 1
+    fi
+    python3 -u /usr/bin/dueslin-installer $AUTO
+    # 安装器退出后挂起，防止 inittab respawn 重复跑安装器
+    slog "[live-start] 安装器已退出，挂起"
+    while true; do sleep 3600; done
+else
+    exec /usr/bin/xinit /root/.xinitrc -- /usr/bin/Xorg :0 -nolisten tcp -logfile /var/log/Xorg.0.log -verbose 3
+fi
